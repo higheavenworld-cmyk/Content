@@ -21,14 +21,18 @@ class Source:
     text: str = ""
     url: str = ""
     image_urls: list[str] = field(default_factory=list)   # images found in the article
-    media_files: list[Path] = field(default_factory=list)  # uploaded images / videos
+    media_files: list[Path] = field(default_factory=list)  # uploaded / downloaded images and videos
+    media_info: dict = field(default_factory=dict)          # path -> {title, text, credit, origin}
+    transcripts: dict = field(default_factory=dict)         # video path -> [(start, end, text)]
 
     def merge(self, other: "Source") -> None:
         self.title = self.title or other.title
         self.text = (self.text + "\n\n" + other.text).strip()
         self.url = self.url or other.url
         self.image_urls += [u for u in other.image_urls if u not in self.image_urls]
-        self.media_files += other.media_files
+        self.media_files += [m for m in other.media_files if m not in self.media_files]
+        self.media_info.update(other.media_info)
+        self.transcripts.update(other.transcripts)
 
 
 def from_url(url: str) -> Source:
@@ -47,10 +51,13 @@ def from_files(paths: list[str | Path]) -> Source:
         ext = p.suffix.lower()
         if ext in IMAGE_EXT or ext in VIDEO_EXT:
             src.media_files.append(p)
+            src.media_info[str(p)] = {"title": p.stem, "text": "", "credit": "", "origin": "upload"}
             if ext in VIDEO_EXT:
-                spoken = transcribe(p)
-                if spoken:
-                    src.text += "\n\n" + spoken
+                from .linkgrab import transcribe
+                segs = transcribe(p)
+                if segs:
+                    src.transcripts[str(p)] = segs
+                    src.text += "\n\n" + " ".join(t for _, _, t in segs)
         elif ext in TEXT_EXT:
             src.text += "\n\n" + p.read_text(encoding="utf-8", errors="ignore")
         elif ext == ".pdf":
@@ -66,17 +73,6 @@ def from_files(paths: list[str | Path]) -> Source:
     if not src.title and src.text:
         src.title = src.text.splitlines()[0][:120]
     return src
-
-
-def transcribe(path: Path) -> str:
-    """Speech-to-text for uploaded videos. Only if the optional faster-whisper is installed."""
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError:
-        return ""
-    model = WhisperModel("small", device="cpu", compute_type="int8")
-    segments, _ = model.transcribe(str(path), language="de")
-    return " ".join(s.text.strip() for s in segments)
 
 
 # --- helpers ----------------------------------------------------------------

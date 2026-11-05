@@ -15,15 +15,28 @@ def mmss(sec: float) -> str:
     return f"{int(sec // 60)}:{int(sec % 60):02d}"
 
 
-def load_source(url: str, files: list[str]) -> extract.Source:
+def load_source(urls: str, files: list[str], log=print) -> extract.Source:
+    """Any number of links (one per line) and/or uploaded files."""
+    from . import linkgrab
     src = extract.Source()
-    if url and url.strip():
-        src.merge(extract.from_url(url.strip()))
+    dl = WORK_DIR / "quellen" / time.strftime("%Y%m%d-%H%M%S")
+    _cleanup_old(WORK_DIR / "quellen")
+    for url in [u.strip() for u in re.split(r"[\s,]+", urls or "") if u.strip().startswith("http")]:
+        log(f"Lese Link: {url[:80]}")
+        src.merge(linkgrab.grab(url, dl, log))
     if files:
         src.merge(extract.from_files(files))
     if not src.text and not src.media_files:
         raise ValueError("Bitte einen Link eingeben oder Dateien hochladen.")
     return src
+
+
+def _cleanup_old(folder: Path, days: float = 2) -> None:
+    if not folder.exists():
+        return
+    for d in folder.iterdir():
+        if d.is_dir() and time.time() - d.stat().st_mtime > days * 86400:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 def make_script(src: extract.Source, target: float) -> tuple[Script, str]:
@@ -59,6 +72,7 @@ def _speak(script: Script, voice_name: str, work: Path, rate: str, min_total: fl
 
 def make_video(script: Script, src: extract.Source, voice_name: str, use_article=True, use_free=True,
                target: float = 40, size: tuple[int, int] = (1080, 1920), log=print) -> dict:
+    t_start = time.time()
     s = load_settings()
     min_total = min_seconds(target)
     slug = re.sub(r"[^a-z0-9]+", "-", " ".join(script.headline).lower()).strip("-")[:40] or "video"
@@ -72,8 +86,9 @@ def make_video(script: Script, src: extract.Source, voice_name: str, use_article
         voices = _speak(script, voice_name, work, s["speech_rate"], min_total, log)
 
         log("2/4 Footage wird gesucht…")
-        clips, credits = footage.collect(script.scenes, src.media_files, src.image_urls, work / "footage",
-                                         use_article, use_free, s.get("pexels_key", ""), log)
+        durations = render.scene_durations(voices, min_total)
+        clips, credits = footage.collect(script.scenes, durations, src, work / "footage", size[0] / size[1],
+                                         use_article, use_free, bool(s.get("youtube_all")), log)
 
         log(f"3/4 Video wird gerendert ({size[0]}×{size[1]})…")
 
@@ -97,7 +112,7 @@ def make_video(script: Script, src: extract.Source, voice_name: str, use_article
     (out / "caption.txt").write_text(caption, encoding="utf-8")
     (out / "script.json").write_text(script.to_json(), encoding="utf-8")
     learn.log_video(vid, script.scenes[0].text, real, voice_name)
-    log(f"Fertig: {out}")
+    log(f"Fertig in {mmss(time.time() - t_start)} Min.: {out}")
     return {"id": vid, "folder": out, "video": out / "video.mp4", "cover": out / "cover.png",
             "caption": caption, "seconds": real, "min_seconds": min_total}
 

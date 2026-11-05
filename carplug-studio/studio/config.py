@@ -61,7 +61,8 @@ VOICES = {
 DEFAULT_SETTINGS = {
     "ollama_model": "qwen2.5:7b",       # optional local AI for scripts
     "ollama_url": "http://localhost:11434",
-    "pexels_key": "",                    # optional, free account -> real video clips
+    "youtube_all": False,                # also non-CC YouTube videos as footage (copyright risk)
+    "cookies_browser": "",               # browser with your Instagram/TikTok login (only if a link needs it)
     "music_volume": 0.18,
     "speech_rate": "+8%",
 }

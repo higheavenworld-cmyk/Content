@@ -15,7 +15,9 @@ Link oder Datei rein, fertiges Video mit Voice-Over, Untertiteln, Musik, Motion 
 
 ## Bedienung
 
-1. **Link** zu einem Artikel einfügen und/oder **Dateien hochladen** (Text, PDF, Word, eigene Bilder oder Videos).
+1. **Links** einfügen (einer pro Zeile) und/oder **Dateien hochladen** (Text, PDF, Word, eigene Bilder oder Videos).
+   Das geht mit fast jedem Link: Blogs, News-Seiten, TikTok, YouTube, Instagram, X/Twitter, Facebook, Reddit,
+   Pinterest, Vimeo sowie direkte Bild- und Video-Links.
 2. **Videolänge** und **Format** wählen (siehe unten).
 3. **① Script erstellen**: Titel, Hook, Szenen und Einblendungen erscheinen und lassen sich frei bearbeiten.
 4. Stimme wählen, dann **② Video erstellen**.
@@ -46,13 +48,37 @@ Bei Hochformat bleiben alle Texte außerhalb der App-Bedienelemente (Buttons rec
 
 | Schritt | Kostenlos und ohne Konto |
 |---|---|
-| Text aus Link oder Datei holen | trafilatura, PDF- und Word-Leser |
+| Text aus Links und Dateien | Artikeltext. Bei Videos: Untertitel, Beschreibung oder lokale Spracherkennung |
 | Script mit Hook, Fakten und Call-to-Action | eingebauter Regel-Writer, besser mit lokaler KI (siehe unten) |
-| Voice-Over | Microsoft-Neural-Stimmen (6 deutsche Stimmen) |
-| Footage | deine Uploads → Bilder aus dem Artikel → Wikimedia Commons und Openverse (freie Lizenzen) |
+| Voice-Over | Microsoft-Neural-Stimmen (6 deutsche Stimmen) oder deine geklonte Stimme |
+| Footage | siehe unten |
 | Untertitel | wortgenau, aktives Wort in CarPlug-Rot |
 | Musik | eigene Tracks aus `assets\music`, sonst ein automatisch erzeugter Beat |
-| Motion Graphics | Intro im Thumbnail-Look, Ken-Burns-Zoom, Keyword-Einblendungen, Flash-Übergänge mit Whoosh, Fortschrittsbalken, Outro |
+| Motion Graphics | Intro im Thumbnail-Look, Info-Karten mit hochzählenden Zahlen, Story-Fortschrittsbalken, rote Übergänge, Outro |
+
+## Footage: passend, abwechslungsreich, ohne fremde Texte
+
+- **Jede Szene bekommt eigenes Material.** Kein Bild kommt doppelt vor, und aus Videos wird jedes Mal ein anderer
+  Abschnitt genommen. Erst wenn wirklich nichts mehr da ist, wird ein Bild gespiegelt erneut genutzt.
+  Das steht dann im Status.
+- **Passend zum Gesagten.** Für jede Szene wird extra gesucht, z. B. „BMW 7 Series interior“, wenn es um den
+  Innenraum geht. Bei Video-Links nimmt das Tool genau die Stelle im Video, an der der Satz gesagt wird.
+- **Quellen:** zuerst deine Links und Uploads, dann Bilder aus Artikeln, dann freies Material:
+  YouTube-Videos mit Creative-Commons-Lizenz, Wikimedia Commons (Fotos und Videos) und Openverse.
+- **Nur das reine Bild.** Eingeblendete Texte, Untertitel, Wasserzeichen, Kanalnamen und schwarze Balken werden
+  erkannt. Das Tool schneidet sie weg oder retuschiert sie. Geht beides nicht, nutzt es das Bild bzw. die Stelle nicht.
+  Kennzeichen und Schilder im Bild bleiben, weil sie zur echten Szene gehören.
+
+> ⚠️ **Wichtig für das TikTok-Creator-Programm:** TikTok bezahlt nur **eigene, originale Inhalte**. Videos, die
+> größtenteils aus fremden TikTok- oder YouTube-Clips bestehen, können als „nicht original“ eingestuft werden,
+> auch ohne Wasserzeichen. Am sichersten sind eigene Aufnahmen, Pressematerial der Hersteller und freie
+> Lizenzen. Die Option „Auch YouTube-Videos ohne freie Lizenz“ unter Einstellungen ist deshalb standardmäßig aus.
+
+## Schnell
+
+Das Video wird parallel auf allen Prozessorkernen gerendert. Auf einem 4-Kern-PC dauert eine Minute Video
+etwa 40–50 Sekunden, mit mehr Kernen entsprechend weniger. Beim ersten Video mit einem Video-Link ohne
+Untertitel wird einmalig die Spracherkennung geladen (ca. 500 MB).
 
 ## Optionale Verbesserungen
 
@@ -62,8 +88,8 @@ Bei Hochformat bleiben alle Texte außerhalb der App-Bedienelemente (Buttons rec
 - **Eigene Stimme klonen:** **`Stimme-klonen-installieren.bat`** ausführen (lädt ca. 3–4 GB), dann im Tab
   „Stimme klonen“ 20–30 Sekunden aufnehmen. Das läuft lokal mit Chatterbox (MIT-Lizenz, kommerziell nutzbar).
   Mit Nvidia-Grafikkarte geht es schnell, ohne dauert es einige Minuten pro Video.
-- **Echte Videoclips statt Fotos:** Bei [pexels.com/api](https://www.pexels.com/api/) einen kostenlosen
-  Schlüssel holen und unter „Einstellungen“ eintragen.
+- **Instagram und andere Links mit Login:** Unter „Einstellungen“ den Browser wählen, in dem du eingeloggt bist.
+  Firefox funktioniert am zuverlässigsten.
 - **Eigene Musik:** lizenzfreie MP3s, z. B. aus der YouTube Audio Library, in `assets\music` legen.
 
 ## Lernen

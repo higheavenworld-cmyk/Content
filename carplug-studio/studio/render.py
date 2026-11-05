@@ -5,8 +5,11 @@ inside the platform SAFE zone, so nothing hides behind the TikTok / Reels / Shor
 """
 from __future__ import annotations
 
+import multiprocessing as mp
+import os
 import re
 import subprocess
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -16,6 +19,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from .config import BLACK, BRAND_URL, FONT_BOLD, FONT_HEADLINE, FPS, GREY, LOGO_FILE, RED, WHITE
 from .footage import Clip
+from .tools import probe
 from .voice import SR, Word, ffmpeg, write_wav
 
 GAP = 0.12            # pause between scenes (seconds)
@@ -240,8 +244,10 @@ def label_for(text: str) -> str:
 class ImageSource:
     """Ken-Burns motion (slow zoom + pan) over a still image."""
 
-    def __init__(self, path: Path, w: int, h: int, seed: int):
+    def __init__(self, path: Path, w: int, h: int, seed: int, flip: bool = False):
         im = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+        if flip:
+            im = ImageOps.mirror(im)
         scale = max(w / im.width, h / im.height) * 1.18
         self.im = im.resize((int(im.width * scale) + 1, int(im.height * scale) + 1), Image.LANCZOS)
         self.w, self.h = w, h
@@ -258,11 +264,18 @@ class ImageSource:
 
 
 class VideoSource:
-    def __init__(self, path: Path, w: int, h: int, dur: float):
+    """Reads the planned part of a video: seek, crop/watermark filters, scale to the output size."""
+
+    def __init__(self, clip: Clip, w: int, h: int, offset: float, dur: float):
         self.w, self.h = w, h
-        vf = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},fps={FPS}"
-        self.proc = subprocess.Popen([ffmpeg(), "-loglevel", "error", "-stream_loop", "-1", "-i", str(path),
-                                      "-t", f"{dur + 1:.2f}", "-vf", vf, "-an", "-f", "rawvideo",
+        _, _, src_dur = probe(clip.path)
+        start = clip.start + offset
+        if src_dur > 0.5:
+            start %= src_dur
+        vf = ",".join(x for x in (clip.vf, "hflip" if clip.flip else "",
+                                  f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},fps={FPS}") if x)
+        self.proc = subprocess.Popen([ffmpeg(), "-loglevel", "error", "-stream_loop", "-1", "-ss", f"{start:.3f}",
+                                      "-i", str(clip.path), "-t", f"{dur + 1:.2f}", "-vf", vf, "-an", "-f", "rawvideo",
                                       "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE)
         self.last = Image.new("RGB", (w, h), BLACK)
 
@@ -339,9 +352,10 @@ class Renderer:
         self.chip_brand = pill("CARPLUG", 30, WHITE, RED + (255,), icon=logo_icon(L.px(40)), pad_x=18)
         self.chip_topic = pill(topic, 28, WHITE, (20, 20, 22, 170)) if topic else None
         self.chip_news = pill("NEWS", 28, WHITE, (20, 20, 22, 170))
-        self.grad_top = vgradient(int(L.h * 0.24), 160, 0)
-        self.grad_bottom = vgradient(int(L.h * 0.6), 0, 235, 1.4)
-        self.grad_intro = vgradient(int(L.h * 0.68), 0, 250, 1.2)
+        # vignette + gradients pre-combined into ONE layer per scene type (much faster per frame)
+        top = vgradient(int(L.h * 0.24), 160, 0)
+        self.shade_body = self._combine(top, vgradient(int(L.h * 0.6), 0, 235, 1.4))
+        self.shade_intro = self._combine(top, vgradient(int(L.h * 0.68), 0, 250, 1.2))
         # headline: fit the width, and never taller than ~55 % of the safe zone
         size = L.px(140)
         n = max(len(self.headline), 1)
@@ -353,6 +367,13 @@ class Renderer:
         self.head_step = int(size * 1.02)
         self.sub_layer = text_img(self.subline, font(fit_size(self.subline, L.sw, L.px(40), L.px(22))), GREY) \
             if self.subline else None
+
+    @staticmethod
+    def _combine(top: Image.Image, bottom: Image.Image) -> Image.Image:
+        layer = vignette().copy()
+        layer.alpha_composite(top, (0, 0))
+        layer.alpha_composite(bottom, (0, L.h - bottom.height))
+        return layer
 
     def topbar(self, frame: Image.Image, body_index: int, p: float) -> None:
         """Story-style progress (one segment per scene; one continuous bar for long videos) + chips."""
@@ -377,9 +398,7 @@ class Renderer:
 
     def intro(self, src, seg: Segment, lt: float) -> Image.Image:
         frame = src.frame(lt / max(seg.dur, 0.1)).copy()
-        paste(frame, vignette(), (0, 0))
-        paste(frame, self.grad_top, (0, 0))
-        paste(frame, self.grad_intro, (0, L.h - self.grad_intro.height))
+        frame.paste(self.shade_intro, (0, 0), self.shade_intro)
         block_h = len(self.head_layers) * self.head_step + (self.sub_layer.height + L.px(20) if self.sub_layer else 0)
         y = L.b - block_h - L.px(10)
         bar = ease(lt / 0.35)
@@ -399,9 +418,7 @@ class Renderer:
 
     def body(self, src, seg: Segment, lt: float, body_index: int, chunks) -> Image.Image:
         frame = src.frame(lt / max(seg.dur, 0.1), 0.08 * (1 - ease(lt / 0.4)))
-        paste(frame, vignette(), (0, 0))
-        paste(frame, self.grad_top, (0, 0))
-        paste(frame, self.grad_bottom, (0, L.h - self.grad_bottom.height))
+        frame.paste(self.shade_body, (0, 0), self.shade_body)
         self.topbar(frame, body_index, min(lt / seg.dur, 1.0))
         if seg.overlay:
             self.stat_card(frame, seg.overlay, lt)
@@ -488,21 +505,84 @@ class Renderer:
 
 
 # --- main entry -------------------------------------------------------------------------
+UNIT_SECONDS = 3.0  # work is split into pieces of ~3 s that are rendered in parallel
+
+
+@dataclass
+class Unit:
+    """One piece of work for a render process."""
+    index: int
+    seg: Segment
+    seg_index: int
+    body_index: int
+    k0: int           # first local frame of the segment in this unit
+    k1: int           # end (exclusive)
+    out: str
+    cover: str | None
+    size: tuple[int, int]
+    headline: list[str]
+    subline: str
+    topic: str
+    n_body: int
+
+
+_RENDERER_CACHE: dict = {}
+
+
+def _render_unit(u: Unit) -> tuple[int, int]:
+    set_layout_if_needed(*u.size)
+    key = (u.size, tuple(u.headline), u.subline, u.topic, u.n_body)
+    r = _RENDERER_CACHE.get(key)
+    if r is None:
+        _RENDERER_CACHE.clear()
+        r = _RENDERER_CACHE[key] = Renderer(u.headline, u.subline, u.topic, u.n_body)
+    seg = u.seg
+    src = None
+    if seg.kind != "outro":
+        src = (VideoSource(seg.clip, L.w, L.h, u.k0 / FPS, (u.k1 - u.k0) / FPS) if seg.clip.kind == "video"
+               else ImageSource(seg.clip.path, L.w, L.h, seed=u.seg_index, flip=seg.clip.flip))
+    chunks = chunk_words(seg.words)
+    cmd = [ffmpeg(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{L.w}x{L.h}",
+           "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-threads", "2",
+           "-pix_fmt", "yuv420p", "-g", str(FPS * 2), u.out]
+    enc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    try:
+        for k in range(u.k0, u.k1):
+            lt = k / FPS
+            if seg.kind == "intro":
+                frame = r.intro(src, seg, lt)
+                if u.cover and abs(lt - 1.2) < 0.5 / FPS:
+                    frame.save(u.cover)
+            elif seg.kind == "body":
+                frame = r.body(src, seg, lt, u.body_index, chunks)
+            else:
+                frame = r.outro(lt)
+            enc.stdin.write(frame.tobytes())
+    finally:
+        enc.stdin.close()
+        enc.wait()
+        if isinstance(src, VideoSource):
+            src.close()
+    if enc.returncode != 0:
+        raise RuntimeError("Video-Encoding fehlgeschlagen.")
+    return u.index, u.k1 - u.k0
+
+
+def set_layout_if_needed(w: int, h: int) -> None:
+    if (L.w, L.h) != (w - w % 2, h - h % 2):
+        set_layout(w, h)
+
+
+def workers() -> int:
+    return max(1, min(8, (os.cpu_count() or 2)))
+
+
 def render(script, clips: list[Clip], voices: list[tuple[np.ndarray, list[Word]]], music_mix_fn,
            out_mp4: Path, cover_png: Path, work: Path, size: tuple[int, int] = (1080, 1920),
            min_total: float | None = None, log=print) -> float:
-    """Build timeline, mix audio, render frames, encode MP4. Returns duration in seconds."""
+    """Build timeline, mix audio, render all pieces in parallel, join them. Returns duration in seconds."""
     set_layout(*size)
-    pause, outro_extra = stretch_plan(voices, min_total)
-    segs, t = [], 0.0
-    n = len(script.scenes)
-    for i, (sc, (audio, words)) in enumerate(zip(script.scenes, voices)):
-        kind = "intro" if i == 0 else "outro" if i == n - 1 else "body"
-        dur = len(audio) / SR + (OUTRO_TAIL + outro_extra if kind == "outro" else
-                                 LEAD + (pause if kind == "body" else 0))
-        segs.append(Segment(kind, t, dur, clips[i], sc.overlay, words))
-        t += dur
-    total = t
+    segs, total = timeline(script, clips, voices, min_total)
 
     voice_track = np.zeros(int(total * SR) + SR, np.float32)
     for seg, (audio, _) in zip(segs, voices):
@@ -517,44 +597,62 @@ def render(script, clips: list[Clip], voices: list[tuple[np.ndarray, list[Word]]
     write_wav(wav, mixed[: int(total * SR)])
 
     topic = next((s.query for s in script.scenes if s.query), "").upper()[:22]
-    r = Renderer(script.headline, script.subline, topic, sum(s.kind == "body" for s in segs))
-    cmd = [ffmpeg(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{L.w}x{L.h}",
-           "-r", str(FPS), "-i", "-", "-i", str(wav), "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-           "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart",
-           str(out_mp4)]
-    enc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-    frames_total = int(total * FPS)
-    done, body_index = 0, -1
-    try:
-        for i, seg in enumerate(segs):
-            src = None
-            if seg.kind != "outro":
-                src = (VideoSource(seg.clip.path, L.w, L.h, seg.dur) if seg.clip.kind == "video"
-                       else ImageSource(seg.clip.path, L.w, L.h, seed=i))
-            if seg.kind == "body":
-                body_index += 1
-            chunks = chunk_words(seg.words)
-            for k in range(int(round((seg.start + seg.dur) * FPS)) - int(round(seg.start * FPS))):
-                lt = k / FPS
-                if seg.kind == "intro":
-                    frame = r.intro(src, seg, lt)
-                    if abs(lt - 1.2) < 0.5 / FPS or (k == 0 and seg.dur < 1.2):
-                        frame.save(cover_png)
-                elif seg.kind == "body":
-                    frame = r.body(src, seg, lt, body_index, chunks)
-                else:
-                    frame = r.outro(lt)
-                enc.stdin.write(frame.tobytes())
-                done += 1
-                if done % (FPS * 5) == 0:
-                    log(f"Rendern… {100 * done / frames_total:.0f} % ({done // FPS} von {int(total)} s)")
-            if isinstance(src, VideoSource):
-                src.close()
-    finally:
-        enc.stdin.close()
-        enc.wait()
-    if enc.returncode != 0:
-        raise RuntimeError("Video-Encoding fehlgeschlagen.")
+    n_body = sum(s.kind == "body" for s in segs)
+    units, body_index = [], -1
+    for i, seg in enumerate(segs):
+        if seg.kind == "body":
+            body_index += 1
+        n_frames = int(round((seg.start + seg.dur) * FPS)) - int(round(seg.start * FPS))
+        step = int(UNIT_SECONDS * FPS)
+        for k0 in range(0, n_frames, step):
+            k1 = min(n_frames, k0 + step)
+            if n_frames - k1 < FPS // 2:  # avoid tiny leftovers
+                k1 = n_frames
+            units.append(Unit(len(units), seg, i, body_index, k0, k1, str(work / f"part_{len(units):04d}.mp4"),
+                              str(cover_png) if seg.kind == "intro" and k0 <= 1.2 * FPS < k1 else None,
+                              (L.w, L.h), script.headline, script.subline, topic, n_body))
+            if k1 == n_frames:
+                break
+
+    n_workers = workers()
+    log(f"Rendern auf {n_workers} Prozessorkernen…")
+    done, frames_total = 0, int(round(total * FPS))
+    with ProcessPoolExecutor(max_workers=n_workers, mp_context=mp.get_context("spawn")) as ex:
+        futures = [ex.submit(_render_unit, u) for u in units]
+        for f in as_completed(futures):
+            _, n = f.result()
+            done += n
+            log(f"Rendern… {100 * done / frames_total:.0f} % ({done // FPS} von {int(total)} s)")
+
+    lst = work / "parts.txt"
+    lst.write_text("".join(f"file '{Path(u.out).as_posix()}'\n" for u in units), encoding="utf-8")
+    res = subprocess.run([ffmpeg(), "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst),
+                          "-i", str(wav), "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                          "-shortest", "-movflags", "+faststart", str(out_mp4)], capture_output=True, text=True)
+    if res.returncode != 0:
+        raise RuntimeError("Zusammenfügen fehlgeschlagen: " + res.stderr[-400:])
     if not cover_png.exists() and segs[0].clip.kind == "image":
+        r = Renderer(script.headline, script.subline, topic, n_body)
         r.intro(ImageSource(segs[0].clip.path, L.w, L.h, 0), segs[0], 1.5).save(cover_png)
     return total
+
+
+def timeline(script, clips, voices, min_total):
+    pause, outro_extra = stretch_plan(voices, min_total)
+    segs, t = [], 0.0
+    n = len(script.scenes)
+    for i, (sc, (audio, words)) in enumerate(zip(script.scenes, voices)):
+        kind = "intro" if i == 0 else "outro" if i == n - 1 else "body"
+        dur = len(audio) / SR + (OUTRO_TAIL + outro_extra if kind == "outro" else
+                                 LEAD + (pause if kind == "body" else 0))
+        segs.append(Segment(kind, t, dur, clips[i], sc.overlay, words))
+        t += dur
+    return segs, t
+
+
+def scene_durations(voices, min_total) -> list[float]:
+    """Screen time of every scene (used to plan footage before rendering)."""
+    pause, outro_extra = stretch_plan(voices, min_total)
+    n = len(voices)
+    return [len(a) / SR + (OUTRO_TAIL + outro_extra if i == n - 1 else LEAD + (pause if i else 0))
+            for i, (a, _) in enumerate(voices)]

@@ -206,10 +206,13 @@ def _overlay(s: str) -> str:
 
 
 def _model_query(s: str) -> str:
+    """'BMW 7er' -> 'BMW 7 Series', 'Mercedes S-Klasse' -> 'Mercedes S-Class' (better picture search)."""
     for b in sorted(BRANDS, key=len, reverse=True):
         m = re.search(rf"\b{re.escape(b)}\b\s*([A-Z0-9][\w-]*(?:\s[A-Z0-9][\w-]*)?)?", s)
         if m:
-            return (b + " " + (m.group(1) or "")).strip()
+            q = (b + " " + (m.group(1) or "")).strip()
+            q = re.sub(r"\b(\d)er\b", r"\1 Series", q)
+            return q.replace("-Klasse", "-Class").replace("Klasse", "Class")
     return ""
 
 

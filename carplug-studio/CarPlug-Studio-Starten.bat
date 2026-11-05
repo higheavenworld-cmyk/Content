@@ -12,5 +12,5 @@ echo  CarPlug Studio laeuft. Der Browser oeffnet sich gleich automatisch.
 echo  Falls nicht: http://127.0.0.1:7860 im Browser oeffnen.
 echo  Dieses Fenster offen lassen - Schliessen beendet das Programm.
 echo.
-".venv\Scripts\python.exe" app.py
+".venv\Scripts\python.exe" run.py
 pause
