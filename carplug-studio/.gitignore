@@ -1,0 +1,9 @@
+.venv/
+.venv-klon/
+.arbeit/
+ausgabe/
+stimmen/
+einstellungen.json
+lernen.json
+lernen-notizen.txt
+__pycache__/

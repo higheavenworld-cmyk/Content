@@ -1,0 +1,8 @@
+gradio>=5.20,<6
+edge-tts>=7.0
+trafilatura>=2.0
+requests>=2.31
+pillow>=10.0
+numpy>=1.26
+imageio-ffmpeg>=0.5
+pypdf>=4.0
