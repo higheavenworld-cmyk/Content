@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field
 import requests
 
 from . import learn
-from .config import BRAND_HASHTAGS, load_settings
+from .config import BRAND_HASHTAGS, MIN_SAFETY_SECONDS, WORDS_PER_SECOND, load_settings
 
 BRANDS = ["BMW", "Mercedes-Benz", "Mercedes", "Audi", "Volkswagen", "VW", "Porsche", "Tesla", "Ford",
           "Opel", "Skoda", "Seat", "Cupra", "Hyundai", "Kia", "Toyota", "Lexus", "Honda", "Mazda", "Nissan",
@@ -24,7 +24,6 @@ UNITS = r"(?:PS|kW|km/h|Nm|Euro|€|kWh|Kilometer|km|Sekunden|Zylinder|Liter|Pro
 NUM_UNIT = re.compile(r"(?:ab\s|über\s|bis zu\s)?\d[\d.,]*\s?" + UNITS, re.I)
 BOILER = re.compile(r"cookie|newsletter|©|copyright|foto:|bild:|quelle:|anzeige|abonn|datenschutz|"
                     r"javascript|werbung|klicken sie|teilen", re.I)
-LENGTHS = {"Kurz (~20 s)": 3, "Mittel (~40 s)": 5, "Lang (~60 s)": 7}
 CTA = "Folg CarPlug für mehr Auto-News!"
 
 
@@ -53,15 +52,43 @@ class Script:
         return Script(**d)
 
 
-def write_script(title: str, text: str, url: str = "", length: str = "Mittel (~40 s)") -> tuple[Script, str]:
+def words_per_second() -> float:
+    rate = str(load_settings().get("speech_rate", "+8%")).rstrip("%")
+    try:
+        return WORDS_PER_SECOND * (1 + int(rate) / 100) / 1.08
+    except ValueError:
+        return WORDS_PER_SECOND
+
+
+def min_seconds(target: float) -> float | None:
+    """From 1 minute on the video must be slightly LONGER than the target (TikTok Creator Rewards)."""
+    return target + MIN_SAFETY_SECONDS if target >= 60 else None
+
+
+def word_budget(target: float) -> int:
+    # aim just above the minimum; missing seconds are filled by pauses / slower speech, never by cutting
+    goal = target + MIN_SAFETY_SECONDS + 1.5 if target >= 60 else target * 1.03
+    n_scenes = max(3, goal / 9)
+    speak = goal - 1.0 - 0.27 * n_scenes
+    return max(12, int(speak * words_per_second()))
+
+
+def estimate_seconds(texts: list[str]) -> float:
+    words = sum(len(t.split()) for t in texts)
+    return words / words_per_second() + 0.27 * max(len(texts) - 1, 0) + 1.0
+
+
+def write_script(title: str, text: str, url: str = "", target: float = 40) -> tuple[Script, str]:
     """Returns (script, info message about which writer was used)."""
-    n = LENGTHS.get(length, 5)
+    budget = word_budget(target)
     s = load_settings()
     try:
-        script = _ollama(title, text, n, s)
+        script = _ollama(title, text, budget, s)
+        if sum(len(sc.text.split()) for sc in script.scenes) < budget * 0.8:
+            raise ValueError("KI-Script zu kurz")
         info = f"Script mit lokaler KI ({s['ollama_model']}) erstellt."
-    except Exception:  # Ollama not installed / not running / bad answer
-        script = _rules(title, text, n)
+    except Exception:  # Ollama not installed / not running / too short answer
+        script = _rules(title, text, budget)
         info = "Script mit eingebautem Regel-Writer erstellt (für bessere Texte: Ollama installieren, siehe Anleitung)."
     if url:
         script.caption += f"\n\nQuelle: {url}"
@@ -70,10 +97,12 @@ def write_script(title: str, text: str, url: str = "", length: str = "Mittel (~4
 
 # --- local AI ---------------------------------------------------------------
 PROMPT = """Du bist Social-Media-Redakteur von CarPlug (Auto-News, TikTok/Reels/Shorts, Deutsch).
-Schreibe aus der QUELLE ein virales Kurzvideo-Script mit {n} Faktenszenen.
+Schreibe aus der QUELLE ein virales Video-Script mit insgesamt ca. {words} gesprochenen Wörtern
+(das ist wichtig für die Videolänge – nicht kürzer!), aufgeteilt auf ca. {n} Faktenszenen.
 Regeln:
 - Szene 1 ist der HOOK: max. 12 Wörter, Neugier oder Überraschung, wichtigste Zahl nennen.
-- Danach {n} Szenen, je 1-2 kurze Sätze (max. 25 Wörter), gesprochen, locker, nur Fakten aus der Quelle.
+- Danach ca. {n} Szenen, je 1-3 Sätze (ca. 20-30 Wörter), gesprochen, locker, nur Fakten aus der Quelle.
+  Bei langen Videos: Hintergründe, Vergleiche und Einordnung aus der Quelle ergänzen, nichts erfinden.
 - Letzte Szene: "{cta}"
 - overlay: 1-3 Wörter in GROSSBUCHSTABEN, z.B. "612 PS" oder "PANZERGLAS".
 - query: englischer Suchbegriff für passende Fotos, möglichst Marke + Modell (z.B. "BMW 7 Series").
@@ -89,13 +118,15 @@ QUELLE:
 {text}"""
 
 
-def _ollama(title: str, text: str, n: int, s: dict) -> Script:
+def _ollama(title: str, text: str, budget: int, s: dict) -> Script:
     tips = learn.insights_for_prompt()
-    prompt = PROMPT.format(n=n, cta=CTA, title=title, text=text[:6000],
+    n = max(2, round(budget / 24))
+    prompt = PROMPT.format(n=n, words=budget, cta=CTA, title=title, text=text[:max(6000, min(budget * 12, 24000))],
                            insights=("Was bei uns bisher gut lief:\n" + tips) if tips else "")
     r = requests.post(f"{s['ollama_url'].rstrip('/')}/api/generate",
                       json={"model": s["ollama_model"], "prompt": prompt, "stream": False, "format": "json",
-                            "options": {"temperature": 0.7}}, timeout=300)
+                            "options": {"temperature": 0.7, "num_ctx": 16384, "num_predict": -1}},
+                      timeout=1800)
     r.raise_for_status()
     d = json.loads(r.json()["response"])
     scenes = [Scene(str(x.get("text", "")).strip(), str(x.get("overlay", "")).upper().strip(),
@@ -112,21 +143,36 @@ def _ollama(title: str, text: str, n: int, s: dict) -> Script:
 
 
 # --- rule-based fallback ------------------------------------------------------
-def _rules(title: str, text: str, n: int) -> Script:
+def _rules(title: str, text: str, budget: int) -> Script:
     title = re.sub(r"\s*[|–—-]\s*[^|–—-]{2,30}$", "", title).strip() or "Neue Auto-News"
     sents = [re.sub(r"\s+", " ", s).strip() for s in re.split(r"(?<=[.!?])\s+|\n+", text)]
-    sents = [s for s in sents if 40 <= len(s) <= 280 and not BOILER.search(s) and s.rstrip(".!?") != title]
+    sents = [s for s in sents if 40 <= len(s) <= 400 and not BOILER.search(s) and s.rstrip(".!?") != title]
     scored = []
     for i, s in enumerate(sents):
         score = 3 * len(NUM_UNIT.findall(s)) + len(re.findall(r"\d", s)) * 0.2 + (2 if i < 5 else 0)
         score += 1.5 * sum(b.lower() in s.lower() for b in BRANDS[:40])
         scored.append((score, i, s))
-    picked = sorted(sorted(scored, reverse=True)[:n], key=lambda x: x[1])
     query = _model_query(title + " " + text[:500])
+    hook = _hook(title, text)
+    remaining = budget - len(hook.split()) - len(CTA.split())
+    picked = []
+    for score, i, s in sorted(scored, reverse=True):  # strongest facts first, until the length fits
+        s = _shorten(s, 45)
+        if remaining - len(s.split()) / 2 < 0:  # would overshoot by more than half a sentence
+            continue
+        picked.append((i, s))
+        remaining -= len(s.split())
+    picked.sort()
 
-    scenes = [Scene(_hook(title, text), (_overlay(title + " " + text[:400]) or ""), query)]
-    for _, _, s in picked:
-        scenes.append(Scene(_shorten(s), _overlay(s), query))
+    scenes = [Scene(hook, (_overlay(title + " " + text[:400]) or ""), query)]
+    group: list[str] = []
+    for _, s in picked:  # short neighbouring sentences share one scene (one picture)
+        if group and len(" ".join(group + [s]).split()) > 32:
+            scenes.append(Scene(" ".join(group), _overlay(" ".join(group)), query))
+            group = []
+        group.append(s)
+    if group:
+        scenes.append(Scene(" ".join(group), _overlay(" ".join(group)), query))
     scenes.append(Scene(CTA, "FOLG CARPLUG", query))
 
     keys = [sc.overlay for sc in scenes[1:-1] if sc.overlay][:3]

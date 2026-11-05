@@ -1,6 +1,6 @@
 # CarPlug Studio
 
-Automatische Auto-News-Videos (9:16 für TikTok, Reels und Shorts) im CarPlug-Branding.
+Automatische Auto-News-Videos im CarPlug-Branding: in jedem Format und von 15 Sekunden bis 10 Minuten.
 Link oder Datei rein, fertiges Video mit Voice-Over, Untertiteln, Musik, Motion Graphics und Post-Text raus.
 **Alles läuft kostenlos und ohne Konten.**
 
@@ -16,13 +16,31 @@ Link oder Datei rein, fertiges Video mit Voice-Over, Untertiteln, Musik, Motion 
 ## Bedienung
 
 1. **Link** zu einem Artikel einfügen und/oder **Dateien hochladen** (Text, PDF, Word, eigene Bilder oder Videos).
-2. **① Script erstellen**: Titel, Hook, Szenen und Einblendungen erscheinen und lassen sich frei bearbeiten.
-3. Stimme wählen, dann **② Video erstellen**.
+2. **Videolänge** und **Format** wählen (siehe unten).
+3. **① Script erstellen**: Titel, Hook, Szenen und Einblendungen erscheinen und lassen sich frei bearbeiten.
+4. Stimme wählen, dann **② Video erstellen**.
    Alternativ macht **⚡ Alles automatisch** beide Schritte in einem Durchgang.
-4. Ergebnis im Ordner `ausgabe\<datum>_<titel>\`:
+5. Ergebnis im Ordner `ausgabe\<datum>_<titel>\`:
    - `video.mp4`: fertiges Video
    - `cover.png`: Thumbnail im CarPlug-Look
    - `caption.txt`: Post-Text, Hashtags und Bildnachweise
+
+## Länge (15 Sekunden bis 10 Minuten)
+
+- **Ab 1 Minute ist das Video garantiert etwas länger** als gewählt, z. B. mindestens 1:03 bei „1 Minute“.
+  So erfüllt es sicher die Mindestlänge für das TikTok-Creator-Programm.
+- Unter dem Script steht die **geschätzte Länge**. Sie aktualisiert sich, sobald du Text änderst.
+- Ist der Text knapp zu kurz, verlängert das Tool automatisch die Pausen und spricht etwas langsamer.
+  Reicht auch das nicht, bricht es mit einem Hinweis ab, statt ein zu kurzes Video zu liefern.
+- Nach dem Rendern wird die echte Dateilänge nochmal geprüft.
+- Lange Videos brauchen lange Quellen: Für 10 Minuten werden ca. 1.400 gesprochene Wörter benötigt.
+  Mit der lokalen KI (Ollama) gelingt das deutlich besser.
+
+## Format
+
+9:16 (TikTok, Reels, Shorts), 4:5 (Instagram-Feed), 1:1, 3:4, 16:9 (YouTube) und 16:9 in 4K.
+Mit **„Eigenes Format“** gibst du Breite und Höhe frei ein (240–3840 Pixel).
+Bei Hochformat bleiben alle Texte außerhalb der App-Bedienelemente (Buttons rechts, Text unten, Leiste oben).
 
 ## Was automatisch passiert
 

@@ -27,6 +27,27 @@ LOGO_FILE = ASSETS / "logo_source.jpg"
 BRAND_URL = "CARPLUG.ONLINE"
 BRAND_HASHTAGS = ["#carplug", "#autonews", "#auto", "#cars"]
 
+# Video formats (width, height). "Eigenes Format" lets you type any size.
+FORMATS = {
+    "9:16 Hochformat – TikTok, Reels, Shorts (1080×1920)": (1080, 1920),
+    "4:5 Instagram/Facebook-Feed (1080×1350)": (1080, 1350),
+    "1:1 Quadratisch (1080×1080)": (1080, 1080),
+    "3:4 Hochformat (1080×1440)": (1080, 1440),
+    "16:9 Querformat – YouTube (1920×1080)": (1920, 1080),
+    "16:9 Querformat 4K (3840×2160)": (3840, 2160),
+}
+CUSTOM_FORMAT = "Eigenes Format (Breite × Höhe frei wählen)"
+
+# Target lengths in seconds. From 1 minute on, the video is guaranteed to be a bit LONGER
+# than the target (TikTok Creator Rewards only pays for videos over 1 minute).
+LENGTHS = {
+    "15 Sekunden": 15, "30 Sekunden": 30, "45 Sekunden": 45,
+    "1 Minute (TikTok-Bonus ✓)": 60, "1,5 Minuten": 90, "2 Minuten": 120, "3 Minuten": 180,
+    "5 Minuten": 300, "7 Minuten": 420, "10 Minuten": 600,
+}
+MIN_SAFETY_SECONDS = 3.0   # 1 min target -> video is at least 1:03
+WORDS_PER_SECOND = 2.4     # spoken German at the default speed (used for planning)
+
 # Free Microsoft neural voices (no account needed)
 VOICES = {
     "Conrad (männlich, News)": "de-DE-ConradNeural",

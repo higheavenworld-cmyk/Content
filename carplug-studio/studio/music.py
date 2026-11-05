@@ -76,15 +76,23 @@ def whoosh(seconds: float = 0.45) -> np.ndarray:
     return out * env / (np.abs(out).max() + 1e-6) * 0.5
 
 
+def _smooth(x: np.ndarray, win: int) -> np.ndarray:
+    """Centered moving average in O(n) – fast even for 10-minute videos."""
+    c = np.concatenate(([0.0], np.cumsum(x, dtype=np.float64)))
+    half = win // 2
+    idx = np.arange(len(x))
+    lo, hi = np.clip(idx - half, 0, len(x)), np.clip(idx + half + 1, 0, len(x))
+    return ((c[hi] - c[lo]) / (hi - lo)).astype(np.float32)
+
+
 def mix(voice: np.ndarray, music: np.ndarray, music_volume: float, sfx_at: list[float]) -> np.ndarray:
     n = max(len(voice), len(music))
     v = np.pad(voice, (0, n - len(voice)))
     m = np.pad(music, (0, n - len(music)))
     # ducking: music gets quieter while someone speaks
     win = int(0.25 * SR)
-    level = np.convolve(np.abs(v), np.ones(win) / win, mode="same")
-    duck = np.where(level > 0.02, 1.0, 2.2)
-    duck = np.convolve(duck, np.ones(win) / win, mode="same")
+    level = _smooth(np.abs(v), win)
+    duck = _smooth(np.where(level > 0.02, 1.0, 2.2).astype(np.float32), win)
     out = v + m * music_volume * duck
     w = whoosh()
     for t in sfx_at:
