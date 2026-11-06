@@ -117,6 +117,9 @@ def build_pool(scenes, durations, src, work: Path, aspect: float, use_article=Tr
                          transcript=src.transcripts.get(str(p), [])))
     if use_article:
         pool += [Cand("image", "article", url=u, meta=src.title) for u in src.image_urls[:20]]
+    if not clean.available():
+        log("⚠️ Texterkennung nicht verfügbar – bitte CarPlug-Studio-Installieren.bat erneut ausführen. "
+            "Ohne sie kann Text im Footage nicht entfernt werden.")
     log(f"Prüfe {len(pool)} Bilder/Videos aus deinen Quellen auf Text und Wasserzeichen…")
     pool = _prepare_all(pool, work, aspect, lock)
     log(f"{len(pool)} saubere Bilder/Videos aus deinen Quellen.")
@@ -296,7 +299,8 @@ def assign(pool: list[Cand], scenes, durations, aspect: float, smart: bool, over
         c = chosen[i][0]
         fit = _fit_only(c, i, fits) if smart else 0.0
         said = c.kind == "video" and _transcript_time(c, scenes[i].text) is not None
-        weak.append(bool(smart and not said and i not in overrides and fit < -0.15))
+        off_topic = c.shows not in ("subject", "") and fit < 0.5  # neither the topic nor clearly what is said
+        weak.append(bool(smart and not said and i not in overrides and (fit < -0.15 or off_topic)))
         reused_flags.append(len(chosen[i]) > 3)
 
     clips, nums, credits = [], [], []

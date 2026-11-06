@@ -81,7 +81,7 @@ def from_files(paths: list[str | Path]) -> Source:
                 segs = transcribe(p)
                 if segs:
                     src.transcripts[str(p)] = segs
-                    src.text += "\n\n" + " ".join(t for _, _, t in segs)
+                    src.text += "\n\n" + transcript_text(segs)
         elif ext in TEXT_EXT:
             src.text += "\n\n" + p.read_text(encoding="utf-8", errors="ignore")
         elif ext == ".pdf":
@@ -97,6 +97,34 @@ def from_files(paths: list[str | Path]) -> Source:
     if not src.title and src.text:
         src.title = src.text.splitlines()[0][:120]
     return src
+
+
+def transcript_text(segs) -> str:
+    """Spoken text as proper sentences. Auto-captions (YouTube, TikTok) have no punctuation:
+    sentences are rebuilt from speaking pauses, so the script never cuts in the middle of a thought."""
+    lines = [t.replace("\n", " ").strip() for _, _, t in segs if t.strip()]
+    if not lines:
+        return ""
+    joined = " ".join(lines)
+    words = len(joined.split())
+    if joined.count(".") + joined.count("!") + joined.count("?") >= words / 35:
+        return joined  # already punctuated (e.g. speech recognition)
+    out, cur, n = [], [], 0
+    for i, (start, end, t) in enumerate(segs):
+        t = t.replace("\n", " ").strip()
+        if not t:
+            continue
+        cur.append(t)
+        n += len(t.split())
+        gap = segs[i + 1][0] - end if i + 1 < len(segs) else 9
+        if gap > 0.6 or n >= 22:
+            sent = " ".join(cur).strip()
+            out.append(sent[0].upper() + sent[1:] + ("" if sent[-1] in ".!?" else "."))
+            cur, n = [], 0
+    if cur:
+        sent = " ".join(cur).strip()
+        out.append(sent[0].upper() + sent[1:] + ("" if sent[-1] in ".!?" else "."))
+    return " ".join(out)
 
 
 # --- helpers ----------------------------------------------------------------

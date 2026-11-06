@@ -5,6 +5,8 @@ import re
 import shutil
 import time
 from dataclasses import dataclass
+
+import numpy as np
 from pathlib import Path
 
 from . import extract, footage, learn, music, render, translate, voice
@@ -49,6 +51,7 @@ def make_script(src: extract.Source, target: float, log=print) -> tuple[Script, 
         raise ValueError(str(e)) from e
     script, info = write_script(src.title, src.text, src.url, target)
     translate.script_to_german(script)
+    _polish_script(script, src, log)
     if translated:
         info += " Quelle wurde automatisch ins Deutsche übersetzt."
     return script, info
@@ -112,7 +115,11 @@ def plan_motion(prep: "Prepared", doc: bool) -> None:
     from .script import NUM_UNIT
     shots, sel = prep.shots, prep.sel
     imgs = sorted([c for c in sel.pool if c.kind == "image"], key=lambda c: -c.subject)
-    safe = [c for c in imgs if c.shows in ("subject", "") and c.topic == "own"] or imgs  # surely on topic
+    # replacement pictures must surely show the topic: recognised as the subject, own sources first
+    safe = ([c for c in imgs if c.shows == "subject" and c.topic == "own"] or
+            [c for c in imgs if c.shows == "subject"] or
+            ([c for c in imgs if c.topic == "own" and c.subject >= np.median([x.subject for x in imgs])]
+             if not sel.smart else []))
     used_nums: set[str] = set()
     since, n_mg = 99, 0
     limit = max(1, int(len(shots) * 0.34))
@@ -269,6 +276,31 @@ def finish(prep: Prepared, script: Script, log=print) -> dict:
 def is_current(prep: Prepared | None, script: Script, voice_name, use_article, use_free, target, size) -> bool:
     return prep is not None and prep.key == _key(script, voice_name, use_article, use_free, target, size) \
         and prep.work.exists()
+
+
+def _polish_script(script: Script, src: extract.Source, log=print) -> None:
+    """Final check: clean spacing/punctuation and correct spelling & grammar (model names stay untouched)."""
+    from . import grammar
+    from .script import BRANDS
+    for sc in script.scenes:
+        t = re.sub(r"\s+", " ", sc.text).strip()
+        t = re.sub(r"\s+([.,!?:;])", r"\1", t)
+        t = re.sub(r"([.!?])\1+", r"\1", t)
+        if t and t[0].islower():
+            t = t[0].upper() + t[1:]
+        if t and t[-1] not in ".!?":
+            t += "."
+        sc.text = t
+    protect = {w for w in re.findall(r"[\w-]+", src.title + " " + " ".join(sc.query for sc in script.scenes))}
+    protect |= {b for b in BRANDS}
+    protect = {w for w in protect if len(w) >= 2 and not w.islower()}
+    for sc in script.scenes:
+        sc.text = grammar.normalize_names(sc.text, protect)
+    script.caption = grammar.normalize_names(script.caption, protect)
+    fixed = grammar.correct_texts([sc.text for sc in script.scenes] + [script.caption], protect, log)
+    for sc, t in zip(script.scenes, fixed):
+        sc.text = t
+    script.caption = fixed[-1]
 
 
 def make_video(script: Script, src: extract.Source, voice_name: str, use_article=True, use_free=True,

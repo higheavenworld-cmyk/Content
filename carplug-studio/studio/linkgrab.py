@@ -76,7 +76,7 @@ def _direct(url: str, work: Path, ext: str) -> Source:
     if ext in VIDEO_EXT:
         segs = transcribe(dst)
         src.transcripts[str(dst)] = segs
-        src.text = " ".join(t for _, _, t in segs)
+        src.text = extract.transcript_text(segs)
     return src
 
 
@@ -207,7 +207,7 @@ def _with_ytdlp(url: str, work: Path, log) -> Source | None:
     src.media_info[str(path)] = {"title": info.get("title") or "", "text": desc + " " + " ".join(info.get("tags") or []),
                                  "credit": credit, "origin": "link"}
     src.transcripts[str(path)] = segs
-    spoken = " ".join(t for _, _, t in segs)
+    spoken = extract.transcript_text(segs)
     src.text = "\n".join(x for x in (desc, spoken) if x)
     for t in info.get("thumbnails") or []:
         if t.get("url") and (t.get("width") or 0) >= 720:

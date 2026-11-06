@@ -37,9 +37,9 @@ def word_style(word: str) -> str:
     return "small"
 
 
-@lru_cache(maxsize=1024)
-def word_img(text: str, style: str, scale: float, dark: bool) -> tuple[Image.Image, int]:
-    """(image, baseline y) of one word with soft glow."""
+@lru_cache(maxsize=2048)
+def word_img(text: str, style: str, scale: float, dark: bool) -> tuple[Image.Image, int, int, int]:
+    """(image, baseline y, padding, text width) of one word: thin black outline + soft shadow for contrast."""
     s = R.L.s * scale
     if style == "key":
         f = ImageFont.truetype(str(FONT_SERIF), max(10, int(150 * s)))
@@ -49,30 +49,59 @@ def word_img(text: str, style: str, scale: float, dark: bool) -> tuple[Image.Ima
         color = NUM_RED
     else:
         f = ImageFont.truetype(str(FONT_BOLD), max(8, int(56 * s)))
-        color = (90, 84, 78) if dark else (236, 236, 236)
+        color = (70, 64, 58) if dark else (245, 245, 245)
+    stroke = 0 if dark else max(2, int(round((4 if style == "key" else 3) * s)))
     asc, desc = f.getmetrics()
-    pad = int(30 * s) + 4
-    w = int(f.getlength(text)) + 2 * pad
-    h = asc + desc + 2 * pad
+    pad = int(30 * s) + 4 + stroke
+    tw = int(f.getlength(text))
+    w, h = tw + 2 * pad, asc + desc + 2 * pad
     base = pad + asc
-    glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    g = ImageDraw.Draw(glow)
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    g = ImageDraw.Draw(img)
     if dark:
         g.text((pad, base + int(4 * s)), text, font=f, fill=(0, 0, 0, 60), anchor="ls")
-        glow = glow.filter(ImageFilter.GaussianBlur(max(1, int(6 * s))))
-    else:
-        g.text((pad + int(2 * s), base + int(5 * s)), text, font=f, fill=(0, 0, 0, 210), anchor="ls")
-        glow = glow.filter(ImageFilter.GaussianBlur(max(1, int(10 * s))))
-        halo = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        ImageDraw.Draw(halo).text((pad, base), text, font=f, fill=color[:3] + (70,), anchor="ls")
-        glow.alpha_composite(halo.filter(ImageFilter.GaussianBlur(max(1, int(14 * s)))))
-    ImageDraw.Draw(glow).text((pad, base), text, font=f, fill=color, anchor="ls")
-    return glow, base
+        img = img.filter(ImageFilter.GaussianBlur(max(1, int(6 * s))))
+    else:  # soft drop shadow
+        g.text((pad + int(3 * s), base + int(6 * s)), text, font=f, fill=(0, 0, 0, 230), anchor="ls",
+               stroke_width=stroke, stroke_fill=(0, 0, 0, 230))
+        img = img.filter(ImageFilter.GaussianBlur(max(1, int(9 * s))))
+    ImageDraw.Draw(img).text((pad, base), text, font=f, fill=color, anchor="ls",
+                             stroke_width=stroke, stroke_fill=(0, 0, 0))  # thin black outline
+    return img, base, pad, tw
+
+
+def _layout(words: list[str], dark: bool, scale: float):
+    """Place a whole phrase: one line if possible, otherwise two balanced lines; shrink until it fits
+    inside the safe zone (never wider than the TikTok frame, never off screen)."""
+    L = R.L
+    max_w, max_h = L.sw * 0.94, L.sh * 0.34
+    sc = scale
+    while True:
+        q = round(sc * 20) / 20
+        items = [word_img(w, word_style(w), q, dark) for w in words]
+        space = int(22 * L.s * q)
+        widths = [it[3] for it in items]
+        total = sum(widths) + space * (len(words) - 1)
+        if total <= max_w or len(words) == 1:
+            lines = [list(range(len(words)))]
+        else:
+            best, cut = None, 1
+            for k in range(1, len(words)):
+                a = sum(widths[:k]) + space * (k - 1)
+                b = sum(widths[k:]) + space * (len(words) - k - 1)
+                if best is None or max(a, b) < best:
+                    best, cut = max(a, b), k
+            lines = [list(range(cut)), list(range(cut, len(words)))]
+        line_w = [sum(widths[i] for i in ln) + space * (len(ln) - 1) for ln in lines]
+        line_h = [max(items[i][1] - items[i][2] for i in ln) * 1.25 for ln in lines]
+        if (max(line_w) <= max_w and sum(line_h) <= max_h) or q <= 0.4:
+            return items, lines, line_w, line_h, space
+        sc = q * 0.9
 
 
 def draw_kinetic(frame: Image.Image, chunks, t: float, y_center: float | None = None, dark: bool = False,
                  scale: float = 1.0, reveal_all: bool = False) -> None:
-    """Words appear exactly when spoken; the current phrase builds up word by word (doc-edit captions)."""
+    """Words appear exactly when spoken, at their final place (nothing jumps), always inside the safe zone."""
     L = R.L
     y_center = y_center if y_center is not None else L.t + 0.58 * L.sh
     if chunks and t < chunks[0][0].start:  # the first word is already there in the very first frame
@@ -81,36 +110,37 @@ def draw_kinetic(frame: Image.Image, chunks, t: float, y_center: float | None = 
         end = chunks[ci + 1][0].start if ci + 1 < len(chunks) else ch[-1].end + 0.35
         if not (ch[0].start - 0.02 <= t < end):
             continue
-        visible = ch if reveal_all else ([w for w in ch if w.start <= t + 0.02] or ch[:1])
-        items = []
-        for k, w in enumerate(visible):
-            img, base = word_img(w.text, word_style(w.text), scale, dark)
-            age = t - w.start
-            p = R.ease(age / 0.14) if (k == len(visible) - 1 and not reveal_all) else 1.0
-            items.append((img, base, p))
-        max_w = L.sw * 0.98
-        lines, cur, cur_w = [], [], 0.0
-        for it in items:
-            iw = it[0].width - L.px(40)
-            if cur and cur_w + iw > max_w:
-                lines.append(cur)
-                cur, cur_w = [], 0.0
-            cur.append(it)
-            cur_w += iw
-        lines.append(cur)
-        heights = [max(i[1] for i in ln) + max(i[0].height - i[1] for i in ln) for ln in lines]
-        y = y_center - sum(h * 0.8 for h in heights) / 2
-        for ln, lh in zip(lines, heights):
-            total = sum(i[0].width - L.px(40) for i in ln)
-            x = L.cx - total / 2 - L.px(20)
-            top = max(i[1] for i in ln)
-            for img, base, p in ln:
-                im = img if p >= 0.99 else R.scaled(img, 0.9 + 0.1 * p)
-                dy = (1 - p) * L.px(18)
-                R.paste(frame, im, (x + (img.width - im.width) / 2, y + top - base * im.height / img.height + dy), p)
-                x += img.width - L.px(40)
-            y += lh * 0.8
+        words = [w.text for w in ch]
+        items, lines, line_w, line_h, space = _layout(words, dark, scale)
+        n_vis = len(ch) if reveal_all else max(1, sum(1 for w in ch if w.start <= t + 0.02))
+        block = sum(line_h)
+        y_top = min(max(y_center - block / 2, L.t + L.px(110)), L.b - block)
+        for li, ln in enumerate(lines):
+            x = L.cx - line_w[li] / 2
+            x = min(max(x, L.l), L.r - line_w[li])
+            asc_max = max(items[i][1] - items[i][2] for i in ln)
+            baseline = y_top + sum(line_h[:li]) + asc_max * 1.1
+            for i in ln:
+                img, base, pad, tw = items[i]
+                if i < n_vis:
+                    newest = i == n_vis - 1 and not reveal_all
+                    p = R.ease((t - ch[i].start) / 0.14) if newest else 1.0
+                    R.paste(frame, img, (x - pad, baseline - base + (1 - p) * L.px(16)), p)
+                x += tw + space
         return
+
+
+@lru_cache(maxsize=2)
+def backdrop() -> Image.Image:
+    """Darkens the footage a little everywhere and more behind the text, so captions are always readable."""
+    L = R.L
+    yy = np.arange(L.h, dtype=np.float32)
+    yc = L.t + 0.58 * L.sh
+    band = np.exp(-((yy - yc) / (L.sh * 0.22)) ** 2)
+    alpha = np.clip(80 + 110 * band, 0, 255).astype(np.uint8)
+    layer = Image.new("RGBA", (L.w, L.h), (0, 0, 0, 0))
+    layer.putalpha(Image.fromarray(np.repeat(alpha[:, None], L.w, axis=1), "L"))
+    return layer
 
 
 # --- motion-graphic shots -------------------------------------------------------------------

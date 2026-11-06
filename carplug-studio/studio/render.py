@@ -66,7 +66,7 @@ def set_layout(w: int, h: int) -> None:
     for fn in (vgradient, vignette, red_glow, subtitle_img):
         fn.cache_clear()
     from . import motion
-    for fn in (motion.paper, motion.hud_grid, motion.word_img):
+    for fn in (motion.paper, motion.hud_grid, motion.word_img, motion.backdrop):
         fn.cache_clear()
 
 
@@ -479,6 +479,8 @@ class Renderer:
                 frame = motion.split_frame(frame, motion.film_look(other) if self.look else other, st)
             else:
                 frame.paste(self.shade_body, (0, 0), self.shade_body)
+            if self.doc:  # darker background behind the captions -> text always readable
+                frame.paste(motion.backdrop(), (0, 0), motion.backdrop())
             frame = motion.apply_transition(frame, shot.trans if (k or self.doc) else "punch", st)
         self.topbar(frame, body_index, min(lt / seg.dur, 1.0))
         if self.doc:

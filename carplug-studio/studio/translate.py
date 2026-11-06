@@ -127,8 +127,9 @@ def source_to_german(src, log=print) -> bool:
     log("Quelle ist nicht auf Deutsch – wird übersetzt…")
     seg_lines = {p: [t.replace("\n", " ").strip() for _, _, t in segs] for p, segs in src.transcripts.items() if segs}
     text = src.text
-    for lines in seg_lines.values():  # the transcript is already in the text as one long line – take it out
-        text = text.replace(" ".join(lines), "\n")
+    from .extract import transcript_text
+    for path in seg_lines:  # the transcript is already in the text – take it out (translated separately)
+        text = text.replace(transcript_text(src.transcripts[path]), "\n")
     rest = []
     for ln in re.split(r"\n+", text):
         ln = ln.strip()
@@ -147,8 +148,8 @@ def source_to_german(src, log=print) -> bool:
     for p, lines in seg_lines.items():
         src.transcripts[p] = [(a, b, done.get(ln, ln)) for (a, b, _), ln in zip(src.transcripts[p], lines)]
     parts = [done[ln] for ln in rest if ln in done]
-    for lines in seg_lines.values():
-        parts.append(" ".join(done[ln] for ln in lines if ln in done))
+    for path in seg_lines:
+        parts.append(transcript_text(src.transcripts[path]))
     src.text = "\n".join(x for x in parts if x.strip())
     return True
 

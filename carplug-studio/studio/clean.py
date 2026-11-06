@@ -44,7 +44,7 @@ def detect_text(rgb: np.ndarray) -> list[Box]:
     if ocr is None:
         return []
     h, w = rgb.shape[:2]
-    scale = min(1.0, 960 / max(w, h))
+    scale = min(1.0, 1280 / max(w, h))  # high enough resolution to also find small watermarks
     small = rgb if scale == 1.0 else np.asarray(Image.fromarray(rgb).resize((int(w * scale), int(h * scale))))
     res, _ = ocr(small, use_det=True, use_cls=False, use_rec=False)
     boxes = []
@@ -135,12 +135,13 @@ def clean_image(src: Path, dst_dir: Path, aspect: float) -> Path | None:
         return None
     boxes = detect_text(rgb)
     dst = dst_dir / (src.stem + "_clean.jpg")
-    win = window_in(content, aspect, boxes, 0.52) or window_in(content, aspect, overlay_like(boxes, w, h), 0.52)
+    # strict: the final picture must not contain ANY text (no captions, watermarks, logos with text)
+    win = window_in(content, aspect, boxes, 0.52)
     if win is None:
-        over = overlay_like(boxes, w, h)
-        if not over or _area(over, w, h) > MAX_FIX_AREA:
+        merged = _merge(boxes)
+        if _area(merged, w, h) > MAX_FIX_AREA:
             return None
-        im = Image.fromarray(inpaint(rgb, [_expand(b, w, h) for b in over]))
+        im = Image.fromarray(inpaint(rgb, [_expand(b, w, h) for b in merged]))
         win = window_in(content, aspect, [], 1.0)
     crop = im.crop(tuple(map(int, win)))
     if min(crop.size) < 360:
@@ -169,14 +170,14 @@ class VideoInfo:
     frames: list = field(default_factory=list)  # small preview frame per sample (for image understanding)
 
 
-def analyze_video(path: Path, max_samples: int = 40) -> VideoInfo | None:
+def analyze_video(path: Path, max_samples: int = 90) -> VideoInfo | None:
     w, h, dur = probe(path)
     if not (w and h and dur >= 1.0):
         return None
     info = VideoInfo(path, w, h, dur)
-    step = max(1.0, dur / max_samples)
+    step = max(0.8, dur / max_samples)  # dense: captions are caught even if they only show briefly
     with tempfile.TemporaryDirectory() as tmp:
-        sw = 480 if w >= h else int(480 * w / h) // 2 * 2
+        sw = 640 if w >= h else int(640 * w / h) // 2 * 2
         subprocess.run([ffmpeg(), "-loglevel", "error", "-i", str(path), "-vf", f"fps=1/{step:.3f},scale={sw}:-2",
                         "-q:v", "4", str(Path(tmp) / "s_%04d.jpg")], check=False)
         contents = []
@@ -208,12 +209,9 @@ def plan_cut(v: VideoInfo, start: float, dur: float, aspect: float) -> VideoCut 
     win = window_in(content, aspect, boxes, 0.6)
     if win:
         return VideoCut(start, win)
-    over = overlay_like(boxes, v.w, v.h)
-    win = window_in(content, aspect, over, 0.6)
-    if win:
-        return VideoCut(start, win)
-    if over and _area(_merge(over), v.w, v.h) <= MAX_FIX_AREA:
-        return VideoCut(start, window_in(content, aspect, [], 1.0), [_expand(b, v.w, v.h) for b in _merge(over)])
+    merged = _merge(boxes)  # strict: every text is removed, otherwise this part of the video is not used
+    if _area(merged, v.w, v.h) <= MAX_FIX_AREA:
+        return VideoCut(start, window_in(content, aspect, [], 1.0), [_expand(b, v.w, v.h) for b in merged])
     return None
 
 

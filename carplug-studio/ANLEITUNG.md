@@ -71,6 +71,9 @@ Angelehnt an Doku-Edits auf TikTok:
   - Splitscreens
 - **Abwechslungsreiche Übergänge:** Zoom-Kick, Blitz, Glitch, Unschärfe.
 - **Film-Look:** warmes Grading, weiches Leuchten.
+- **Immer lesbar:** Text bleibt immer im TikTok-Rahmen (lange Wörter werden automatisch kleiner, höchstens
+  2 Zeilen, nichts springt). Jeder Buchstabe hat einen dünnen schwarzen Rand plus Schatten, und der Hintergrund
+  ist hinter dem Text abgedunkelt.
 - **Sofortiger Start:** kein Titelbild im Video. Ab dem ersten Frame laufen Footage und Wort-für-Wort-Text.
   Das Titeldesign gibt es weiterhin als `cover.png` für das Thumbnail.
 
@@ -88,6 +91,13 @@ Schnitt-Tempo oder ohne Film-Look umschalten.
 - **Ohne KI-Bildverständnis** wird gar kein freies Footage verwendet, nur deine Links und Uploads.
 - **Nicht einfach übernommen:** höchstens zwei Schnitte am Stück aus demselben Video, höchstens 40 % aus einem
   einzelnen Link-Video. Freies Footage und eigene Grafiken werden immer dazugemischt.
+
+## Fehlerfreies Script
+
+- Untertitel ohne Satzzeichen (YouTube/TikTok) werden anhand der Sprechpausen wieder zu ganzen Sätzen.
+- Sätze werden nie mitten im Gedanken abgeschnitten.
+- Marken, Modelle und Einheiten werden korrekt geschrieben (BMW, M760e, xDrive, PS, km/h, 500.000 Euro).
+- Automatische Rechtschreib- und Grammatikprüfung (LanguageTool, kostenlos). Modellnamen bleiben dabei unverändert.
 
 ## Retention: damit die Leute dranbleiben
 
@@ -114,8 +124,9 @@ Schnitt-Tempo oder ohne Film-Look umschalten.
 - **Du hast das letzte Wort.** Mit **② Footage prüfen** siehst du jeden Schnitt mit seinem Bild und darunter alle
   gefundenen Bilder mit Nummern. In der Szenen-Tabelle steht unter **„Footage-Nr.“** eine Nummer pro Schnitt,
   z. B. „3, 7, 12“. Ändere sie nach Belieben. Gibst du weniger Nummern ein als Schnitte, wählt die KI den Rest.
-- **Nur das reine Bild.** Eingeblendete Texte, Untertitel, Wasserzeichen, Kanalnamen und schwarze Balken werden
-  erkannt und weggeschnitten oder retuschiert, sonst wird das Bild nicht verwendet.
+- **Footage strikt ohne Text.** Jede Videostelle wird etwa jede Sekunde auf Text geprüft. Jeder gefundene Text
+  (Untertitel, Wasserzeichen, Kanalnamen) wird weggeschnitten oder retuschiert, sonst wird die Stelle nicht
+  verwendet. Schwarze Balken werden entfernt.
 - **Quellen:** deine Links und Uploads, Bilder aus Artikeln, dann freies Material (YouTube mit
   Creative-Commons-Lizenz, Wikimedia Commons, Openverse).
 

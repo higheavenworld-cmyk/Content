@@ -185,7 +185,8 @@ def _rules(title: str, text: str, budget: int) -> Script:
     remaining = budget - 20 - len(CTA.split())  # hook + open loop + bridges
     picked = []
     for score, i, s in sorted(scored, reverse=True):  # strongest facts first, until the length fits
-        s = _shorten(s, 45)
+        if any(len(p.split()) > 32 for p in _punchy(s)):
+            continue  # never cut a sentence in the middle – too long sentences are left out
         if remaining - len(s.split()) / 2 < 0:  # would overshoot by more than half a sentence
             continue
         picked.append((i, s))
