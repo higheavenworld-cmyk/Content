@@ -75,9 +75,44 @@ def save_clone_sample(name: str, audio_path: str) -> Path:
 
 
 # --- synthesis ----------------------------------------------------------------
-def synth_many(texts: list[str], voice: str, work: Path, rate: str = "+8%",
+SPEAK = [  # written form -> how a German news speaker says it
+    (r"(\d)\s*[–-]\s*(\d+)\s*km/h", r"\1 auf \2 Kilometer pro Stunde"), (r"km/h", "Kilometer pro Stunde"),
+    (r"\bkWh\b", "Kilowattstunden"), (r"\bkW\b", "Kilowatt"), (r"\bNm\b", "Newtonmeter"),
+    (r"\bkm\b", "Kilometer"), (r"\bkg\b", "Kilogramm"), (r"(\d)\s*%", r"\1 Prozent"), (r"(\d)\s*€", r"\1 Euro"),
+    (r"€\s*(\d[\d.,]*)", r"\1 Euro"), (r"\bca\.", "circa"), (r"\bz\.\s?B\.", "zum Beispiel"),
+    (r"\bu\.\s?a\.", "unter anderem"), (r"\bbzw\.", "beziehungsweise"), (r"\binkl\.", "inklusive"),
+    (r"\bMio\.", "Millionen"), (r"\bMrd\.", "Milliarden"), (r"\bd\.\s?h\.", "das heißt"), (r"\bv\.\s?a\.", "vor allem"),
+    (r"\bNr\.", "Nummer"), (r"\bPS\b", "PS"), (r"&", " und "),
+]
+
+
+def speech_text(text: str) -> str:
+    """Make written text sound natural when spoken (units, abbreviations, model names, no links/emojis)."""
+    t = re.sub(r"https?://\S+|#\w+|@\w+", " ", text)
+    t = re.sub(r"\([^)]{0,80}\)", " ", t)                                   # (side notes) are not read out
+    t = re.sub(r"[\U0001F000-\U0001FAFF\u2600-\u27BF]", " ", t)              # emojis
+    for pat, rep in SPEAK:
+        t = re.sub(pat, rep, t)
+    t = re.sub(r"\b([A-Z]{1,3})(\d{2,4})([a-z]{0,2})\b", lambda m: " ".join(x for x in m.groups() if x), t)  # M760e
+    t = re.sub(r"\s*[;–—]\s*", ", ", t)                                       # dashes -> short breath
+    t = re.sub(r"\s+", " ", t).strip()
+    return re.sub(r"\s+([.,!?:])", r"\1", t)
+
+
+def polish(src: Path, dst: Path) -> None:
+    """Studio sound: remove rumble, gentle compression, a bit of presence, even loudness."""
+    chain = ("highpass=f=75,lowpass=f=15000,"
+             "acompressor=threshold=-20dB:ratio=2.5:attack=8:release=120:makeup=2,"
+             "equalizer=f=180:t=q:w=1.2:g=1.5,equalizer=f=3200:t=q:w=1.4:g=2,"
+             "loudnorm=I=-16:TP=-1.5:LRA=9")
+    subprocess.run([ffmpeg(), "-y", "-loglevel", "error", "-i", str(src), "-af", chain, "-ac", "1", "-ar", str(SR),
+                    str(dst)], check=True)
+
+
+def synth_many(texts: list[str], voice: str, work: Path, rate: str = "+0%",
                log=print) -> list[tuple[np.ndarray, list[Word]]]:
     """Speak every scene; returns [(samples at 44.1 kHz mono, word timings), ...]."""
+    texts = [speech_text(t) for t in texts]
     if voice.startswith(CLONE_PREFIX):
         return _synth_clone(texts, VOICES_DIR / f"{voice[len(CLONE_PREFIX):]}.wav", work, log)
     return [_synth_edge(t, VOICES.get(voice, voice), work / f"voice_{i}.wav", rate) for i, t in enumerate(texts)]
@@ -100,7 +135,7 @@ def _synth_edge(text: str, voice_id: str, out_wav: Path, rate: str) -> tuple[np.
                     words.append(Word(ch["text"], s, s + ch["duration"] / 1e7))
 
     asyncio.run(run())
-    to_wav(mp3, out_wav)
+    polish(mp3, out_wav)
     audio = read_wav(out_wav)
     return audio, words or estimate_words(text, len(audio) / SR)
 
@@ -127,7 +162,7 @@ def _synth_clone(texts: list[str], ref: Path, work: Path, log) -> list[tuple[np.
     out = []
     for i, (t, it) in enumerate(zip(texts, items)):
         wav = work / f"voice_{i}.wav"
-        to_wav(Path(it["out"]), wav)
+        polish(Path(it["out"]), wav)
         audio = read_wav(wav)
         out.append((audio, align_words(wav, t, len(audio) / SR)))
     return out

@@ -166,6 +166,7 @@ class VideoInfo:
     dur: float
     samples: list[tuple[float, list[Box]]] = field(default_factory=list)  # (time, text boxes)
     content: Box | None = None  # picture area without black bars
+    frames: list = field(default_factory=list)  # small preview frame per sample (for image understanding)
 
 
 def analyze_video(path: Path, max_samples: int = 40) -> VideoInfo | None:
@@ -180,7 +181,9 @@ def analyze_video(path: Path, max_samples: int = 40) -> VideoInfo | None:
                         "-q:v", "4", str(Path(tmp) / "s_%04d.jpg")], check=False)
         contents = []
         for i, f in enumerate(sorted(Path(tmp).glob("s_*.jpg"))):
-            rgb = np.asarray(Image.open(f).convert("RGB"))
+            frame = Image.open(f).convert("RGB")
+            info.frames.append(frame.copy())
+            rgb = np.asarray(frame)
             k = w / rgb.shape[1]
             boxes = [(b[0] * k, b[1] * k, b[2] * k, b[3] * k) for b in detect_text(rgb)] if available() else []
             info.samples.append((i * step + step / 2, boxes))

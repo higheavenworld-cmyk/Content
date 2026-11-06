@@ -645,7 +645,7 @@ def timeline(script, clips, voices, min_total):
         kind = "intro" if i == 0 else "outro" if i == n - 1 else "body"
         dur = len(audio) / SR + (OUTRO_TAIL + outro_extra if kind == "outro" else
                                  LEAD + (pause if kind == "body" else 0))
-        segs.append(Segment(kind, t, dur, clips[i], sc.overlay, words))
+        segs.append(Segment(kind, t, dur, clips[i], sc.overlay, [Word(w.text, w.start, w.end) for w in words]))
         t += dur
     return segs, t
 

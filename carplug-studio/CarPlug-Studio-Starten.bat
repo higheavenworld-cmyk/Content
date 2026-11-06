@@ -11,6 +11,8 @@ echo.
 echo  CarPlug Studio laeuft. Der Browser oeffnet sich gleich automatisch.
 echo  Falls nicht: http://127.0.0.1:7860 im Browser oeffnen.
 echo  Dieses Fenster offen lassen - Schliessen beendet das Programm.
+echo  (Video-Downloader wird kurz aktualisiert...)
+".venv\Scripts\python.exe" -m pip install -q -U yt-dlp yt-dlp-ejs >nul 2>&1
 echo.
 ".venv\Scripts\python.exe" run.py
 pause

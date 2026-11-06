@@ -8,3 +8,4 @@ lernen.json
 lernen-notizen.txt
 __pycache__/
 .tools/
+.modelle/

@@ -53,9 +53,9 @@ class Script:
 
 
 def words_per_second() -> float:
-    rate = str(load_settings().get("speech_rate", "+8%")).rstrip("%")
+    rate = str(load_settings().get("speech_rate", "+0%")).rstrip("%")
     try:
-        return WORDS_PER_SECOND * (1 + int(rate) / 100) / 1.08
+        return WORDS_PER_SECOND * (1 + int(rate) / 100)
     except ValueError:
         return WORDS_PER_SECOND
 

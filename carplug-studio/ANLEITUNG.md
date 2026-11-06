@@ -20,8 +20,8 @@ Link oder Datei rein, fertiges Video mit Voice-Over, Untertiteln, Musik, Motion 
    Pinterest, Vimeo sowie direkte Bild- und Video-Links.
 2. **Videolänge** und **Format** wählen (siehe unten).
 3. **① Script erstellen**: Titel, Hook, Szenen und Einblendungen erscheinen und lassen sich frei bearbeiten.
-4. Stimme wählen, dann **② Video erstellen**.
-   Alternativ macht **⚡ Alles automatisch** beide Schritte in einem Durchgang.
+4. Stimme wählen, dann **② Footage prüfen** (Bilder ansehen und bei Bedarf tauschen) und **③ Video erstellen**.
+   Alternativ macht **⚡ Alles automatisch** alle Schritte in einem Durchgang.
 5. Ergebnis im Ordner `ausgabe\<datum>_<titel>\`:
    - `video.mp4`: fertiges Video
    - `cover.png`: Thumbnail im CarPlug-Look
@@ -49,8 +49,9 @@ Bei Hochformat bleiben alle Texte außerhalb der App-Bedienelemente (Buttons rec
 | Schritt | Kostenlos und ohne Konto |
 |---|---|
 | Text aus Links und Dateien | Artikeltext. Bei Videos: Untertitel, Beschreibung oder lokale Spracherkennung |
+| Immer auf Deutsch | Fremdsprachige Quellen (z. B. englische YouTube-Videos) werden automatisch übersetzt: lokale KI, sonst Google oder MyMemory (kostenlos, ohne Konto) |
 | Script mit Hook, Fakten und Call-to-Action | eingebauter Regel-Writer, besser mit lokaler KI (siehe unten) |
-| Voice-Over | Microsoft-Neural-Stimmen (6 deutsche Stimmen) oder deine geklonte Stimme |
+| Voice-Over | Microsoft-Neural-Stimmen. Am natürlichsten sind die ★-Stimmen Florian und Seraphina. Dazu Aussprache-Aufbereitung (km/h, Einheiten, Modellnamen) und Studio-Klang. Am realistischsten ist deine geklonte Stimme |
 | Footage | siehe unten |
 | Untertitel | wortgenau, aktives Wort in CarPlug-Rot |
 | Musik | eigene Tracks aus `assets\music`, sonst ein automatisch erzeugter Beat |
@@ -58,16 +59,21 @@ Bei Hochformat bleiben alle Texte außerhalb der App-Bedienelemente (Buttons rec
 
 ## Footage: passend, abwechslungsreich, ohne fremde Texte
 
-- **Jede Szene bekommt eigenes Material.** Kein Bild kommt doppelt vor, und aus Videos wird jedes Mal ein anderer
-  Abschnitt genommen. Erst wenn wirklich nichts mehr da ist, wird ein Bild gespiegelt erneut genutzt.
-  Das steht dann im Status.
-- **Passend zum Gesagten.** Für jede Szene wird extra gesucht, z. B. „BMW 7 Series interior“, wenn es um den
-  Innenraum geht. Bei Video-Links nimmt das Tool genau die Stelle im Video, an der der Satz gesagt wird.
-- **Quellen:** zuerst deine Links und Uploads, dann Bilder aus Artikeln, dann freies Material:
-  YouTube-Videos mit Creative-Commons-Lizenz, Wikimedia Commons (Fotos und Videos) und Openverse.
+- **KI-Bildverständnis.** Eine lokale KI (SigLIP 2 von Google, versteht Deutsch) schaut sich jedes Bild und jede
+  Videostelle an und vergleicht sie mit dem Thema (z. B. „BMW 7 Series“) und dem gesprochenen Satz.
+  Bilder, die etwas anderes zeigen (anderes Auto, Personen, Logos …), werden aussortiert. Das Modell wird beim
+  ersten Mal einmalig geladen (ca. 1,5 GB) und läuft danach offline.
+- **Beste Gesamtverteilung.** Jede Szene bekommt das insgesamt am besten passende Material. Das Titelbild zeigt
+  das Thema am deutlichsten. Kein Bild kommt doppelt vor, aus Videos wird jedes Mal ein anderer Abschnitt genommen.
+- **Bei Video-Links** wird genau die Stelle genommen, an der der Satz gesagt wird.
+- **Nur Bilder aus dem Artikel selbst.** Teaser anderer Artikel, Autorenfotos, Werbung und Logos werden ignoriert.
+- **Du hast das letzte Wort.** Mit **② Footage prüfen** siehst du pro Szene das gewählte Bild und darunter alle
+  gefundenen Bilder mit Nummern. Gefällt dir eins nicht, trägst du in der Szenen-Tabelle unter **„Footage-Nr.“**
+  eine andere Nummer ein. Leer lassen heißt, die KI wählt.
 - **Nur das reine Bild.** Eingeblendete Texte, Untertitel, Wasserzeichen, Kanalnamen und schwarze Balken werden
-  erkannt. Das Tool schneidet sie weg oder retuschiert sie. Geht beides nicht, nutzt es das Bild bzw. die Stelle nicht.
-  Kennzeichen und Schilder im Bild bleiben, weil sie zur echten Szene gehören.
+  erkannt und weggeschnitten oder retuschiert, sonst wird das Bild nicht verwendet.
+- **Quellen:** deine Links und Uploads, Bilder aus Artikeln, dann freies Material (YouTube mit
+  Creative-Commons-Lizenz, Wikimedia Commons, Openverse).
 
 > ⚠️ **Wichtig für das TikTok-Creator-Programm:** TikTok bezahlt nur **eigene, originale Inhalte**. Videos, die
 > größtenteils aus fremden TikTok- oder YouTube-Clips bestehen, können als „nicht original“ eingestuft werden,
@@ -79,6 +85,13 @@ Bei Hochformat bleiben alle Texte außerhalb der App-Bedienelemente (Buttons rec
 Das Video wird parallel auf allen Prozessorkernen gerendert. Auf einem 4-Kern-PC dauert eine Minute Video
 etwa 40–50 Sekunden, mit mehr Kernen entsprechend weniger. Beim ersten Video mit einem Video-Link ohne
 Untertitel wird einmalig die Spracherkennung geladen (ca. 500 MB).
+
+## Wenn ein Link nicht geht
+
+Die Fehlermeldung sagt jetzt genau, was los ist. Häufig:
+- **YouTube „kein Bot“ / Login nötig:** YouTube einmal in Firefox öffnen (eingeloggt) und unter ⚙️ Einstellungen
+  den Login-Browser „firefox“ wählen.
+- Der Video-Downloader aktualisiert sich bei jedem Start automatisch, weil YouTube & Co. sich oft ändern.
 
 ## Optionale Verbesserungen
 

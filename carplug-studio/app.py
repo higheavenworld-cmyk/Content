@@ -10,17 +10,17 @@ import traceback
 
 import gradio as gr
 
-from studio import learn, pipeline, voice
+from studio import footage, learn, pipeline, voice
 from studio.config import ASSETS, CUSTOM_FORMAT, FORMATS, LENGTHS, OUTPUT_DIR, load_settings, save_settings
 from studio.pipeline import mmss
 from studio.script import Scene, Script, estimate_seconds, min_seconds
 
-HEADERS = ["Sprechertext", "Einblendung", "Bildsuche (englisch)"]
+HEADERS = ["Sprechertext", "Einblendung", "Bildsuche (englisch)", "Footage-Nr."]
 
 
 # --- helpers -----------------------------------------------------------------
 def script_to_ui(sc: Script):
-    rows = [[s.text, s.overlay, s.query] for s in sc.scenes]
+    rows = [[s.text, s.overlay, s.query, ""] for s in sc.scenes]
     return sc.headline[0], sc.headline[1], sc.headline[2], sc.subline, rows, \
         sc.caption, " ".join(sc.hashtags)
 
@@ -31,6 +31,33 @@ def ui_to_script(h1, h2, h3, sub, rows, caption, tags) -> Script:
     if len(scenes) < 2:
         raise gr.Error("Das Script braucht mindestens 2 Szenen (Hook + Abschluss).")
     return Script([h1 or "", h2 or "", h3 or ""], sub or "", scenes, caption or "", (tags or "").split())
+
+
+def overrides_from(rows) -> dict[int, int]:
+    """Footage numbers the user typed into the scene table (empty = let the AI choose)."""
+    out = {}
+    for i, r in enumerate(rows or []):
+        if r and len(r) > 3 and str(r[3]).strip():
+            try:
+                out[i] = int(float(str(r[3]).strip().lstrip("Nr.").strip()))
+            except ValueError:
+                pass
+    return out
+
+
+def selection_view(prep, rows):
+    """Scene table with the chosen numbers + preview galleries."""
+    thumbs = footage.thumbnails(prep.sel, prep.work)
+    by_num = {int(lbl.split()[1]): path for path, lbl in thumbs}
+    rows = [list(r) + [""] * (4 - len(r)) for r in (rows or [])]
+    chosen = []
+    for i, num in enumerate(prep.sel.nums):
+        if i < len(rows):
+            rows[i][3] = str(num) if num else ""
+        if num and num in by_num:
+            text = str(rows[i][0])[:50] if i < len(rows) else ""
+            chosen.append((by_num[num], f"Szene {i + 1} → Nr. {num}: {text}"))
+    return rows, chosen, thumbs
 
 
 def get_size(fmt, cw, ch):
@@ -88,7 +115,7 @@ def run_with_log(fn):
 def _script_job(url, files, length, log):
     src = pipeline.load_source(url, files, log)
     log("Script wird geschrieben…")
-    sc, info = pipeline.make_script(src, LENGTHS[length])
+    sc, info = pipeline.make_script(src, LENGTHS[length], log)
     return src, info, sc
 
 
@@ -102,28 +129,61 @@ def do_script(url, files, length):
         else:
             src, info, sc = box["result"]
             ui = script_to_ui(sc)
-            yield (src, f"✅ {info} Prüfe und bearbeite das Script unten, dann **② Video erstellen**.\n\n"
+            yield (src, f"✅ {info} Prüfe und bearbeite das Script unten, dann **② Footage prüfen** oder gleich **③ Video erstellen**.\n\n"
                    + length_info(ui[4], length), *ui)
 
 
-def do_video(src, h1, h2, h3, sub, rows, caption, tags, voice_name, use_article, use_free, length, fmt, cw, ch):
+def _ensure_prepared(src, prep, sc, voice_name, use_article, use_free, target, size, overrides, log):
+    if not pipeline.is_current(prep, sc, voice_name, use_article, use_free, target, size):
+        prep = pipeline.prepare(sc, src, voice_name, use_article, use_free, target, size, log)
+    pipeline.choose(prep, sc, overrides, log)
+    return prep
+
+
+def do_footage(src, prep, h1, h2, h3, sub, rows, caption, tags, voice_name, use_article, use_free, length, fmt,
+               cw, ch):
     if src is None:
         raise gr.Error("Bitte zuerst ① Script erstellen.")
     sc = ui_to_script(h1, h2, h3, sub, rows, caption, tags)
-    size = get_size(fmt, cw, ch)
-    target = LENGTHS[length]
-    for log, box in run_with_log(lambda log: pipeline.make_video(sc, src, voice_name, use_article, use_free,
-                                                                 target, size, log)):
+    size, target, over = get_size(fmt, cw, ch), LENGTHS[length], overrides_from(rows)
+    for log, box in run_with_log(lambda log: _ensure_prepared(src, prep, sc, voice_name, use_article, use_free,
+                                                              target, size, over, log)):
         if box is None:
-            yield log, None, None, "", ""
+            yield gr.update(), log, gr.update(), gr.update(), gr.update()
         elif "error" in box:
-            yield f"❌ Fehler: {box['error']}", None, None, "", ""
+            yield gr.update(), f"❌ Fehler: {box['error']}", gr.update(), gr.update(), gr.update()
+        else:
+            new = box["result"]
+            new_rows, chosen, thumbs = selection_view(new, rows)
+            how = "von der KI nach Bildinhalt" if new.sel.smart else "nach Stichworten"
+            yield (new, f"✅ Footage {how} ausgewählt. Gefällt dir ein Bild nicht? Trage in der Szenen-Tabelle "
+                        f"unter „Footage-Nr.“ eine andere Nummer aus „Alle gefundenen“ ein und klicke erneut "
+                        f"② – oder direkt ③.", new_rows, chosen, thumbs)
+
+
+def do_video(src, prep, h1, h2, h3, sub, rows, caption, tags, voice_name, use_article, use_free, length, fmt,
+             cw, ch):
+    if src is None:
+        raise gr.Error("Bitte zuerst ① Script erstellen.")
+    sc = ui_to_script(h1, h2, h3, sub, rows, caption, tags)
+    size, target, over = get_size(fmt, cw, ch), LENGTHS[length], overrides_from(rows)
+    box_prep = {}
+
+    def job(log):
+        p = _ensure_prepared(src, prep, sc, voice_name, use_article, use_free, target, size, over, log)
+        box_prep["p"] = p
+        return pipeline.finish(p, sc, log)
+
+    for log, box in run_with_log(job):
+        if box is None:
+            yield gr.update(), log, None, None, "", ""
+        elif "error" in box:
+            yield box_prep.get("p", gr.update()), f"❌ Fehler: {box['error']}", None, None, "", ""
         else:
             r = box["result"]
             check = f" (Minimum {mmss(r['min_seconds'])} ✅)" if r["min_seconds"] else ""
-            yield (f"✅ Fertig! Länge {mmss(r['seconds'])}{check} · {size[0]}×{size[1]}. Ordner: {r['folder']}",
-                   str(r["video"]),
-                   str(r["cover"]), r["caption"], str(r["folder"]))
+            yield (box_prep["p"], f"✅ Fertig! Länge {mmss(r['seconds'])}{check} · {size[0]}×{size[1]}. "
+                   f"Ordner: {r['folder']}", str(r["video"]), str(r["cover"]), r["caption"], str(r["folder"]))
 
 
 def do_all(url, files, length, fmt, cw, ch, voice_name, use_article, use_free):
@@ -131,9 +191,9 @@ def do_all(url, files, length, fmt, cw, ch, voice_name, use_article, use_free):
     last = None
     for out in do_script(url, files, length):
         last = out
-        yield (*out, "Quellen werden gelesen…", None, None, "", "")
+        yield (*out, gr.update(), "Quellen werden gelesen…", None, None, "", "")
     src, info, *ui = last
-    for out in do_video(src, *ui, voice_name, use_article, use_free, length, fmt, cw, ch):
+    for out in do_video(src, None, *ui, voice_name, use_article, use_free, length, fmt, cw, ch):
         yield (src, info, *ui, *out)
 
 
@@ -177,6 +237,7 @@ def build_ui() -> gr.Blocks:
             gr.Markdown("# CarPlug <span>Studio</span>\nLink oder Datei rein → fertiges Video im CarPlug-Look raus.",
                         elem_id="title")
         src_state = gr.State(None)
+        prep_state = gr.State(None)
 
         with gr.Tab("🎬 Video erstellen"):
             with gr.Row():
@@ -209,14 +270,23 @@ def build_ui() -> gr.Blocks:
                     h2 = gr.Textbox(label="Titel Zeile 2 (ROT)")
                     h3 = gr.Textbox(label="Titel Zeile 3 (weiß)")
                 sub = gr.Textbox(label="Unterzeile (grau)")
-                rows = gr.Dataframe(headers=HEADERS, datatype=["str", "str", "str"], col_count=(3, "fixed"),
+                rows = gr.Dataframe(headers=HEADERS, datatype=["str", "str", "str", "str"], col_count=(4, "fixed"),
                                     type="array", interactive=True, wrap=True,
                                     label="Szenen – 1. Zeile = Hook, letzte = Abschluss")
                 length_md = gr.Markdown()
                 with gr.Row():
                     caption = gr.Textbox(label="Post-Text", lines=3, scale=3)
                     tags = gr.Textbox(label="Hashtags", lines=3, scale=2)
-            btn_video = gr.Button("② Video erstellen", variant="primary")
+            with gr.Row():
+                btn_footage = gr.Button("② Footage prüfen", variant="secondary")
+                btn_video = gr.Button("③ Video erstellen", variant="primary")
+            with gr.Accordion("Footage-Auswahl (nach ② sichtbar)", open=True):
+                gr.Markdown("**Gewählt pro Szene.** Anderes Bild gewünscht? In der Szenen-Tabelle bei "
+                            "„Footage-Nr.“ eine Nummer aus „Alle gefundenen“ eintragen. Leer lassen = KI wählt.")
+                chosen_gal = gr.Gallery(label="Gewählt pro Szene", columns=6, height=260, object_fit="cover",
+                                        allow_preview=True)
+                pool_gal = gr.Gallery(label="Alle gefundenen Bilder/Videos (Nummern)", columns=8, height=320,
+                                      object_fit="cover", allow_preview=True)
             status = gr.Textbox(label="Status", lines=4, interactive=False)
             with gr.Row():
                 out_video = gr.Video(label="Video", height=560)
@@ -226,13 +296,15 @@ def build_ui() -> gr.Blocks:
                     out_folder = gr.Textbox(label="Gespeichert in", interactive=False)
 
         script_fields = [h1, h2, h3, sub, rows, caption, tags]
-        video_out = [status, out_video, out_cover, out_caption, out_folder]
+        video_out = [prep_state, status, out_video, out_cover, out_caption, out_folder]
+        settings_in = [voice_dd, use_article, use_free, length, fmt, cw, ch]
         fmt.change(lambda f: (gr.update(visible=f == CUSTOM_FORMAT),) * 2, fmt, [cw, ch])
         rows.change(lambda r, ln: length_info(r, ln), [rows, length], length_md)
         length.change(lambda r, ln: length_info(r, ln), [rows, length], length_md)
         btn_script.click(do_script, [url, files, length], [src_state, info, *script_fields])
-        btn_video.click(do_video, [src_state, *script_fields, voice_dd, use_article, use_free, length, fmt, cw, ch],
-                        video_out)
+        btn_footage.click(do_footage, [src_state, prep_state, *script_fields, *settings_in],
+                          [prep_state, status, rows, chosen_gal, pool_gal])
+        btn_video.click(do_video, [src_state, prep_state, *script_fields, *settings_in], video_out)
         btn_all.click(do_all, [url, files, length, fmt, cw, ch, voice_dd, use_article, use_free],
                       [src_state, info, *script_fields, *video_out])
 

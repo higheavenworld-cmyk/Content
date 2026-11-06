@@ -12,6 +12,7 @@ Each scene gets its own picture or a different, non-overlapping part of a video.
 from __future__ import annotations
 
 import hashlib
+import heapq
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -23,7 +24,7 @@ import numpy as np
 import requests
 from PIL import Image
 
-from . import clean
+from . import clean, vision
 from .extract import IMAGE_EXT, UA, VIDEO_EXT
 
 HEAD = {"User-Agent": "CarPlugStudio/1.0 (social video tool)"}
@@ -73,16 +74,34 @@ class Cand:
     used: list = field(default_factory=list)  # used (start, end) parts of a video
     uses: int = 0
     dhash: int | None = None
+    num: int = 0                          # number shown to the user (1, 2, 3 …)
+    emb: np.ndarray | None = None         # image understanding: one vector (image) or one per sample (video)
+    subject: float = 0.0                  # how clearly it shows the topic (e.g. the car)
+
+
+@dataclass
+class Selection:
+    """Result of footage planning – shown to the user, who can swap pictures by number."""
+    clips: list[Clip]
+    nums: list[int]               # chosen footage number per scene (0 = outro, no footage)
+    credits: list[str]
+    pool: list[Cand]
+    smart: bool                   # True = image understanding was used
 
 
 # --- public entry --------------------------------------------------------------
 def collect(scenes, durations, src, work: Path, aspect: float, use_article=True, use_free=True,
-            youtube_all=False, log=print) -> tuple[list[Clip], list[str]]:
+            youtube_all=False, log=print) -> Selection:
+    pool = build_pool(scenes, durations, src, work, aspect, use_article, use_free, youtube_all, log)
+    smart = rate_pool(pool, scenes, log)
+    return assign(pool, scenes, durations, aspect, smart, {}, log)
+
+
+def build_pool(scenes, durations, src, work: Path, aspect: float, use_article=True, use_free=True,
+               youtube_all=False, log=print) -> list[Cand]:
     work.mkdir(parents=True, exist_ok=True)
     pool: list[Cand] = []
     lock = threading.Lock()
-
-    # 1) your media + article pictures
     for p in src.media_files:
         info = src.media_info.get(str(p), {})
         kind = "video" if Path(p).suffix.lower() in VIDEO_EXT else "image"
@@ -90,37 +109,245 @@ def collect(scenes, durations, src, work: Path, aspect: float, use_article=True,
                          info.get("text", ""), credit=info.get("credit", ""),
                          transcript=src.transcripts.get(str(p), [])))
     if use_article:
-        pool += [Cand("image", "article", url=u, meta=src.title) for u in src.image_urls[:25]]
-    log(f"Prüfe {len(pool)} eigene Bilder/Videos auf Text und Wasserzeichen…")
+        pool += [Cand("image", "article", url=u, meta=src.title) for u in src.image_urls[:20]]
+    log(f"Prüfe {len(pool)} Bilder/Videos aus deinen Quellen auf Text und Wasserzeichen…")
     pool = _prepare_all(pool, work, aspect, lock)
     log(f"{len(pool)} saubere Bilder/Videos aus deinen Quellen.")
-
-    # 2) free footage, searched per scene until there is enough for every scene
-    total_seconds = sum(durations)
-    if use_free and _capacity(pool, durations) < len(scenes):
+    n_needed = max(len(scenes) - 1, 1)  # the outro needs no footage
+    if use_free and _capacity(pool, durations) < n_needed * 1.6:
         for q in _queries(scenes):
-            if _capacity(pool, durations) >= len(scenes) * 1.3:
+            if _capacity(pool, durations) >= n_needed * 2.2:  # extra choice so the AI can pick
                 break
             log(f"Suche Footage: „{q}“…")
-            found = _search(q, work, youtube_all)
-            pool += _prepare_all(found, work, aspect, lock)
+            pool += _prepare_all(_search(q, work, youtube_all), work, aspect, lock)
     if not pool:
         raise RuntimeError("Kein sauberes Bildmaterial gefunden. Lade eigene Bilder/Videos hoch oder nutze andere Links.")
+    for i, c in enumerate(pool, 1):
+        c.num = i
+    return pool
 
-    # 3) assign the best fitting, unused footage to every scene
-    clips, credits, prev = [], [], None
-    for i, (sc, dur) in enumerate(zip(scenes, durations)):
-        clip, cand = _pick(sc, dur, pool, prev, aspect)
-        clips.append(clip)
-        prev = cand
-        if cand.credit and cand.credit not in credits:
-            credits.append(cand.credit)
-    reused = sum(1 for c in clips if c.flip)
+
+def subject_of(scenes) -> str:
+    return next((s.query for s in scenes if s.query), "")
+
+
+def rate_pool(pool: list[Cand], scenes, log=print) -> bool:
+    """Image understanding: vectors for every picture / video frame, and how clearly each shows the topic.
+    Pictures that clearly show something else (other cars, people, logos …) are removed."""
+    if not vision.CACHE.exists() or not any(vision.CACHE.rglob("*.onnx")):
+        log("KI-Bildverständnis wird beim ersten Mal geladen (ca. 1,5 GB, nur einmalig)…")
+    if not vision.available():
+        log("Hinweis: KI-Bildverständnis nicht verfügbar – Auswahl nach Stichworten. "
+            + (f"({vision.last_error()})" if vision.last_error() else ""))
+        return False
+    log("KI bewertet, was auf den Bildern zu sehen ist…")
+    imgs = [c for c in pool if c.kind == "image"]
+    if imgs:
+        for c, e in zip(imgs, vision.embed_images([c.clean_path for c in imgs])):
+            c.emb = e[None, :]
+    for c in pool:
+        if c.kind == "video":
+            c.emb = vision.embed_images(c.video.frames) if c.video.frames else None
+    subject = subject_of(scenes) or (scenes[0].text if scenes else "")
+    t_subj = vision.embed_texts([f"Foto: {subject}"])[0]
+    for c in pool:
+        if c.emb is None or not len(c.emb):
+            c.subject = -1.0
+            continue
+        sims = np.sort(c.emb @ t_subj)[::-1]
+        c.subject = float(sims[: max(1, len(sims) // 3)].mean())  # video: its best third of frames
+    vals = np.array([c.subject for c in pool])
+    keep_min = max(len(scenes) - 1, 1)
+    if len(pool) > keep_min and vals.std() > 1e-4:
+        z = (vals - vals.mean()) / vals.std()
+        off = [c for c, zz in zip(pool, z) if zz < -1.0 and c.origin != "upload"]
+        off = sorted(off, key=lambda c: c.subject)[: max(0, len(pool) - keep_min)]
+        if off:
+            log(f"{len(off)} unpassende(s) Bild/Video aussortiert (zeigt nicht „{subject}“).")
+            for c in off:
+                pool.remove(c)
+    return True
+
+
+# --- assignment ----------------------------------------------------------------------
+def assign(pool: list[Cand], scenes, durations, aspect: float, smart: bool, overrides: dict[int, int],
+           log=print) -> Selection:
+    """Give every scene the best fitting footage overall (not just the first good one), never twice.
+    overrides: {scene index: footage number} chosen by the user."""
+    for c in pool:
+        c.used, c.uses = [], 0
+    n = len(scenes)
+    last = n - 1  # outro: logo screen, no footage
+    by_num = {c.num: c for c in pool}
+    fits = _fit_matrix(pool, scenes, smart)
+    chosen: dict[int, tuple[Cand, float | None, clean.VideoCut | None]] = {}
+
+    for i, num in overrides.items():  # 1) the user's choice always wins
+        c = by_num.get(int(num))
+        if c is None or i >= last:
+            continue
+        plan = _video_plan(c, i, durations[i], aspect, fits, smart, scenes[i].text) if c.kind == "video" else None
+        if c.kind == "video" and plan is None:
+            c.used.clear()
+            plan = _video_plan(c, i, durations[i], aspect, fits, smart, scenes[i].text)
+        chosen[i] = (c, *(plan or (None, None)))
+        c.uses += 1
+        if plan:
+            c.used.append((plan[0], plan[0] + durations[i]))
+
+    heap = []  # 2) best (scene, footage) pairs first
+    for i in range(last):
+        if i in chosen:
+            continue
+        for c in pool:
+            heapq.heappush(heap, (-_pair_score(c, i, fits, smart, scenes[i]), i, c.num))
+    while heap and len(chosen) < last:
+        neg, i, num = heapq.heappop(heap)
+        if i in chosen:
+            continue
+        c = by_num[num]
+        if c.kind == "image":
+            if c.uses:
+                continue
+            chosen[i] = (c, None, None)
+            c.uses += 1
+            continue
+        plan = _video_plan(c, i, durations[i], aspect, fits, smart, scenes[i].text)
+        if plan is None:
+            continue
+        chosen[i] = (c, *plan)
+        c.uses += 1
+        c.used.append((plan[0], plan[0] + min(durations[i], c.video.dur)))
+
+    reused = 0
+    for i in range(last):  # 3) not enough material: reuse a picture mirrored, never the neighbour's
+        if i in chosen:
+            continue
+        neighbours = {chosen[j][0].num for j in (i - 1, i + 1) if j in chosen}
+        options = [c for c in pool if c.num not in neighbours] or pool
+        c = min(options, key=lambda x: (x.uses, -_pair_score(x, i, fits, smart, scenes[i])))
+        c.uses += 1
+        reused += 1
+        if c.kind == "image":
+            chosen[i] = (c, None, None)
+        else:
+            c.used.clear()
+            plan = _video_plan(c, i, durations[i], aspect, fits, smart, scenes[i].text)
+            chosen[i] = (c, *(plan or (0.0, clean.VideoCut(0.0, (0, 0, c.video.w, c.video.h)))))
+        chosen[i] = chosen[i] + ("flip",)
     if reused:
         log(f"Hinweis: Zu wenig unterschiedliches Material – {reused} Szene(n) nutzen ein Bild gespiegelt erneut.")
-    log(f"Footage: {len({str(c.path) for c in clips})} verschiedene Quellen für {len(clips)} Szenen "
-        f"({total_seconds:.0f} s).")
-    return clips, credits
+
+    clips, nums, credits = [], [], []
+    for i in range(n):
+        if i == last:
+            ref = clips[-1] if clips else None
+            clips.append(ref or Clip(pool[0].clean_path or pool[0].path, pool[0].kind))
+            nums.append(0)
+            continue
+        c, start, cut, *flag = chosen[i]
+        flip = bool(flag)
+        if c.kind == "image":
+            clips.append(Clip(c.clean_path, "image", c.credit, flip=flip))
+        else:
+            clips.append(Clip(c.path, "video", c.credit, start or 0.0,
+                              clean.ffmpeg_filters(cut, c.video.w, c.video.h), flip=flip))
+        nums.append(c.num)
+        if c.credit and c.credit not in credits:
+            credits.append(c.credit)
+    log(f"Footage: {len(set(nums) - {0})} verschiedene Bilder/Videos für {last} Szenen"
+        + (" (KI-Bildverständnis)." if smart else " (Stichworte)."))
+    return Selection(clips, nums, credits, pool, smart)
+
+
+def _fit_matrix(pool, scenes, smart):
+    """How well each picture (or each video frame) matches each scene's sentence."""
+    if not smart:
+        return None
+    subject = subject_of(scenes)
+    t = vision.embed_texts([vision.describe_scene(s.text, subject) for s in scenes])
+    fits = {}
+    all_vals = []
+    for c in pool:
+        if c.emb is None or not len(c.emb):
+            continue
+        m = c.emb @ t.T  # (frames, scenes)
+        fits[c.num] = m
+        all_vals.append(m.ravel())
+    if all_vals:
+        v = np.concatenate(all_vals)
+        mu, sd = float(v.mean()), float(v.std() or 1.0)
+        for k in fits:
+            fits[k] = (fits[k] - mu) / sd
+    subj = np.array([c.subject for c in pool])
+    s_mu, s_sd = float(subj.mean()), float(subj.std() or 1.0)
+    for c in pool:
+        c.subject_z = (c.subject - s_mu) / s_sd
+    return fits
+
+
+def _pair_score(c: Cand, i: int, fits, smart: bool, sc) -> float:
+    bonus = {"upload": 0.6, "link": 0.4, "article": 0.4}.get(c.origin, 0.0)
+    if smart and fits is not None and c.num in fits:
+        col = fits[c.num][:, i]
+        fit = float(np.sort(col)[::-1][: max(1, len(col) // 4)].mean())  # video: its best quarter
+        subj = getattr(c, "subject_z", 0.0)
+        w_subj = 1.2 if i == 0 else 0.5  # the opening picture (cover) must show the topic clearly
+        score = fit + w_subj * subj + bonus
+    else:
+        kw = _scene_keywords(sc)
+        score = ORIGIN_WEIGHT.get(c.origin, 1.0) + 2.5 * len(kw & _tokens(c.meta)) / max(3, len(kw))
+    if c.kind == "video":
+        if _transcript_time(c, sc.text) is not None:
+            score += 2.0  # exactly what is being said
+        score += 0.2
+    return score
+
+
+def _video_plan(c: Cand, i: int, dur: float, aspect: float, fits, smart: bool, text: str):
+    """Best free part of a video for scene i: what is said there, or the frames that fit best."""
+    v = c.video
+    need = min(dur, v.dur)
+    if v.dur < 1.5:
+        return None
+    starts: list[float] = []
+    want = _transcript_time(c, text)
+    if want is not None:
+        starts.append(max(0.0, min(want - 0.3, v.dur - need)))
+    if smart and fits is not None and c.num in fits and v.samples:
+        col = fits[c.num][:, i]
+        ranked = sorted(range(len(col)), key=lambda k: -col[k])
+        starts += [max(0.0, min(v.samples[k][0] - need / 2, v.dur - need)) for k in ranked]
+    starts += list(np.arange(0.0, max(v.dur - need, 0) + 0.01, max(1.0, need / 2)))
+    for s in starts:
+        if any(s < b and a < s + need for a, b in c.used):
+            continue
+        cut = clean.plan_cut(v, s, need, aspect)
+        if cut:
+            return s, cut
+    return None
+
+
+def thumbnails(sel: Selection, work: Path) -> list[tuple[str, str]]:
+    """Preview pictures of all found footage, numbered (for the user's choice)."""
+    out = []
+    tdir = work / "vorschau"
+    tdir.mkdir(parents=True, exist_ok=True)
+    for c in sel.pool:
+        dst = tdir / f"{c.num:03d}.jpg"
+        if not dst.exists():
+            try:
+                if c.kind == "image":
+                    im = Image.open(c.clean_path).convert("RGB")
+                else:
+                    im = c.video.frames[len(c.video.frames) // 2] if c.video.frames else Image.new("RGB", (9, 16))
+                im.thumbnail((360, 360))
+                im.save(dst, quality=85)
+            except Exception:
+                continue
+        label = f"Nr. {c.num} · {'🎬 Video' if c.kind == 'video' else '🖼️ Bild'} · {c.origin}"
+        out.append((str(dst), label))
+    return out
 
 
 # --- preparing (download + text filter + duplicates) ------------------------------------
@@ -172,7 +399,7 @@ def _dhash(p: Path) -> int:
     return int("".join("1" if b else "0" for b in bits), 2)
 
 
-# --- matching ----------------------------------------------------------------------
+# --- keyword matching (fallback without image understanding) -------------------------------
 def _tokens(s: str) -> set[str]:
     return {w for w in re.findall(r"[a-zäöüß0-9]{3,}", s.lower()) if w not in STOP}
 
@@ -196,71 +423,6 @@ def _transcript_time(c: Cand, text: str) -> float | None:
         if ov > best:
             best, best_t = ov, s
     return best_t if best >= 0.35 else None
-
-
-def _free_start(c: Cand, dur: float, aspect: float, want: float | None) -> tuple[float, clean.VideoCut] | None:
-    v = c.video
-    if v.dur < 1.5:
-        return None
-    need = min(dur, v.dur)
-    starts = []
-    if want is not None:
-        starts.append(max(0.0, min(want - 0.3, v.dur - need)))
-    starts += list(np.arange(0.0, max(v.dur - need, 0) + 0.01, max(1.0, need / 2)))
-    for s in starts:
-        if any(s < b and a < s + need for a, b in c.used):
-            continue
-        cut = clean.plan_cut(v, s, need, aspect)
-        if cut:
-            return s, cut
-    return None
-
-
-def _pick(sc, dur: float, pool: list[Cand], prev: Cand | None, aspect: float) -> tuple[Clip, Cand]:
-    kw = _scene_keywords(sc)
-    best = None
-    for c in pool:
-        score = ORIGIN_WEIGHT.get(c.origin, 1.0)
-        meta = _tokens(c.meta)
-        score += 2.5 * len(kw & meta) / max(3, len(kw))
-        want = None
-        if c.kind == "video":
-            want = _transcript_time(c, sc.text)
-            if want is not None:
-                score += 5  # exactly what is being said
-            score += 0.5
-        elif c.uses:
-            continue  # a picture is never shown twice (as long as alternatives exist)
-        if c is prev:
-            score -= 3
-        score -= 1.5 * c.uses
-        if best and score <= best[0]:
-            continue
-        if c.kind == "video":
-            plan = _free_start(c, dur, aspect, want)
-            if not plan:
-                continue
-            best = (score, c, plan)
-        else:
-            best = (score, c, None)
-    if best is None:  # everything used: reuse a picture mirrored, never the one before
-        options = ([x for x in pool if x is not prev and x.kind == "image"] or [x for x in pool if x is not prev]
-                   or pool)
-        c = min(options, key=lambda x: x.uses)
-        c.uses += 1
-        if c.kind == "image":
-            return Clip(c.clean_path, "image", c.credit, flip=True), c
-        c.used.clear()
-        plan = _free_start(c, dur, aspect, None)
-        s, cut = plan if plan else (0.0, clean.VideoCut(0.0, (0, 0, c.video.w, c.video.h)))
-        return Clip(c.path, "video", c.credit, s, clean.ffmpeg_filters(cut, c.video.w, c.video.h), flip=True), c
-    _, c, plan = best
-    c.uses += 1
-    if c.kind == "image":
-        return Clip(c.clean_path, "image", c.credit), c
-    s, cut = plan
-    c.used.append((s, s + min(dur, c.video.dur)))
-    return Clip(c.path, "video", c.credit, s, clean.ffmpeg_filters(cut, c.video.w, c.video.h)), c
 
 
 # --- searching -------------------------------------------------------------------------

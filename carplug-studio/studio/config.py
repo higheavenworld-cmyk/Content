@@ -46,16 +46,18 @@ LENGTHS = {
     "5 Minuten": 300, "7 Minuten": 420, "10 Minuten": 600,
 }
 MIN_SAFETY_SECONDS = 3.0   # 1 min target -> video is at least 1:03
-WORDS_PER_SECOND = 2.4     # spoken German at the default speed (used for planning)
+WORDS_PER_SECOND = 2.25    # spoken German at normal speed (used for planning)
 
 # Free Microsoft neural voices (no account needed)
 VOICES = {
-    "Conrad (männlich, News)": "de-DE-ConradNeural",
-    "Killian (männlich, jung)": "de-DE-KillianNeural",
-    "Florian (männlich, multilingual)": "de-DE-FlorianMultilingualNeural",
-    "Seraphina (weiblich, multilingual)": "de-DE-SeraphinaMultilingualNeural",
-    "Katja (weiblich, News)": "de-DE-KatjaNeural",
-    "Amala (weiblich, jung)": "de-DE-AmalaNeural",
+    "★ Florian – männlich, sehr natürlich": "de-DE-FlorianMultilingualNeural",
+    "★ Seraphina – weiblich, sehr natürlich": "de-DE-SeraphinaMultilingualNeural",
+    "Conrad – männlich, Nachrichten": "de-DE-ConradNeural",
+    "Katja – weiblich, Nachrichten": "de-DE-KatjaNeural",
+    "Killian – männlich, jung": "de-DE-KillianNeural",
+    "Amala – weiblich, jung": "de-DE-AmalaNeural",
+    "Jonas – männlich, Österreich": "de-AT-JonasNeural",
+    "Jan – männlich, Schweiz": "de-CH-JanNeural",
 }
 
 DEFAULT_SETTINGS = {
@@ -64,7 +66,7 @@ DEFAULT_SETTINGS = {
     "youtube_all": False,                # also non-CC YouTube videos as footage (copyright risk)
     "cookies_browser": "",               # browser with your Instagram/TikTok login (only if a link needs it)
     "music_volume": 0.18,
-    "speech_rate": "+8%",
+    "speech_rate": "+0%",
 }
 
 

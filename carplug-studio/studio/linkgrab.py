@@ -98,18 +98,33 @@ class _Quiet:
     def error(self, msg): pass
 
 
+VIDEO_SITES = re.compile(r"(^|\.)(youtube\.com|youtu\.be|tiktok\.com|instagram\.com|x\.com|twitter\.com|"
+                         r"facebook\.com|fb\.watch|vimeo\.com|reddit\.com|dailymotion\.com|twitch\.tv|"
+                         r"threads\.net|snapchat\.com|linkedin\.com|bilibili\.com)$", re.I)
+
+
+def _js_runtime() -> dict:
+    """YouTube needs a JavaScript runtime since late 2025 – Deno is installed with the program."""
+    try:
+        import deno
+        return {"deno": {"path": deno.find_deno_bin()}}
+    except Exception:
+        return {"deno": {}, "node": {}}
+
+
 def ytdlp_opts(work: Path, **extra) -> dict:
     s = load_settings()
     opts = {
         "logger": _Quiet(),
         "quiet": True, "no_warnings": True, "noplaylist": True, "noprogress": True,
         "outtmpl": str(work / "%(extractor)s_%(id)s.%(ext)s"),
-        "format": "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/bv*[height<=1080]+ba/b",
+        "format": "bv*+ba/b",
+        "format_sort": ["res:1080", "ext:mp4:m4a", "vcodec:h264"],
         "merge_output_format": "mp4",
         "ffmpeg_location": ffmpeg_dir(),
-        "writesubtitles": True, "writeautomaticsub": True,
-        "subtitleslangs": ["de", "de-orig", "de.*", "en", "en-orig", "en.*"], "subtitlesformat": "vtt",
-        "socket_timeout": 30, "retries": 3,
+        "js_runtimes": _js_runtime(),
+        "remote_components": {"ejs:github"},
+        "socket_timeout": 30, "retries": 5, "fragment_retries": 5,
     }
     if s.get("cookies_browser"):
         opts["cookiesfrombrowser"] = (s["cookies_browser"],)
@@ -117,13 +132,36 @@ def ytdlp_opts(work: Path, **extra) -> dict:
     return opts
 
 
+def _friendly(err: Exception) -> str:
+    m = re.sub(r"\x1b\[[0-9;]*m", "", str(err))
+    low = m.lower()
+    if "not a bot" in low or "sign in to confirm" in low:
+        return ("YouTube möchte eine Bestätigung, dass du kein Bot bist. Öffne YouTube einmal in Firefox (eingeloggt), "
+                "wähle unter ⚙️ Einstellungen den Login-Browser „firefox“ und versuche es erneut.")
+    if "private" in low or "login" in low or "cookies" in low or ("age" in low and "restrict" in low):
+        return ("Dieser Link braucht einen Login (privat, Altersgrenze oder Instagram). Unter ⚙️ Einstellungen den "
+                "Browser wählen, in dem du eingeloggt bist, und erneut versuchen.")
+    if "unavailable" in low or "removed" in low:
+        return "Das Video ist nicht (mehr) verfügbar oder in deinem Land gesperrt."
+    if "unable to connect" in low or "timed out" in low or "connection" in low and "error" in low:
+        return "Keine Verbindung zur Plattform. Prüfe dein Internet (oder Firewall/VPN) und versuche es erneut."
+    if "unsupported url" in low:
+        return "Dieser Link wird nicht unterstützt."
+    if "ffmpeg" in low:
+        return "Video konnte nicht zusammengesetzt werden (ffmpeg). Bitte CarPlug-Studio-Installieren.bat erneut ausführen."
+    return "Video konnte nicht geladen werden: " + m[:300]
+
+
 def _with_ytdlp(url: str, work: Path, log) -> Source | None:
     import yt_dlp
 
+    platform = bool(VIDEO_SITES.search(urlparse(url).hostname or ""))
     try:
         with yt_dlp.YoutubeDL(ytdlp_opts(work, simulate=True)) as y:
             info = y.extract_info(url, download=False)
-    except Exception:
+    except Exception as e:
+        if platform:  # a video platform link must never silently turn into "read the web page"
+            raise ValueError(_friendly(e)) from e
         return None
     if not info or info.get("_type") == "playlist" and not info.get("entries"):
         return None
@@ -135,26 +173,37 @@ def _with_ytdlp(url: str, work: Path, log) -> Source | None:
         return None
     if (info.get("duration") or 0) > MAX_VIDEO_SECONDS:
         raise ValueError("Das Video ist länger als 30 Minuten – bitte ein kürzeres verwenden.")
+    sub_lang = _pick_sub_lang(info)
     log(f"Video wird geladen: {info.get('title', '')[:60]}…")
     try:
         with yt_dlp.YoutubeDL(ytdlp_opts(work)) as y:
             info = y.extract_info(url, download=True)
     except Exception as e:
-        msg = str(e)
-        if "login" in msg.lower() or "cookies" in msg.lower() or "private" in msg.lower():
-            raise ValueError("Dieser Link braucht einen Login (z. B. Instagram). Unter Einstellungen den Browser "
-                             "wählen, in dem du eingeloggt bist, und erneut versuchen.") from e
+        if platform:
+            raise ValueError(_friendly(e)) from e
         return None
     path = _downloaded_file(info, work)
     if not path:
+        if platform:
+            raise ValueError("Video wurde geladen, aber die Datei fehlt. Bitte erneut versuchen.")
         return None
+    segs = []
+    if sub_lang:  # subtitles separately: a subtitle error must not break the video download
+        try:
+            with yt_dlp.YoutubeDL(ytdlp_opts(work, skip_download=True, writesubtitles=True, writeautomaticsub=True,
+                                             subtitleslangs=[sub_lang], subtitlesformat="vtt")) as y:
+                segs = _subtitles(y.extract_info(url, download=True))
+        except Exception:
+            segs = []
+    if not segs:
+        log("Sprache wird erkannt (keine Untertitel)…")
+        segs = transcribe(path)
     generic = (info.get("extractor") or "").lower().startswith("generic")
     src = Source(title=("\x00generic" if generic else "") + (info.get("title") or ""), url=url, media_files=[path])
     desc = (info.get("description") or "").strip()
     credit = f"Video: {info.get('uploader') or info.get('channel') or ''} ({info.get('extractor_key', '')})"
     src.media_info[str(path)] = {"title": info.get("title") or "", "text": desc + " " + " ".join(info.get("tags") or []),
                                  "credit": credit, "origin": "link"}
-    segs = _subtitles(info) or (log("Sprache wird erkannt (Untertitel fehlen)…") or transcribe(path))
     src.transcripts[str(path)] = segs
     spoken = " ".join(t for _, _, t in segs)
     src.text = "\n".join(x for x in (desc, spoken) if x)
@@ -162,6 +211,22 @@ def _with_ytdlp(url: str, work: Path, log) -> Source | None:
         if t.get("url") and (t.get("width") or 0) >= 720:
             src.image_urls.append(t["url"])
     return src
+
+
+def _pick_sub_lang(info: dict) -> str | None:
+    """German if available, otherwise the original language (it gets translated later)."""
+    manual = info.get("subtitles") or {}
+    auto = info.get("automatic_captions") or {}
+    if "de" in manual:
+        return "de"
+    lang = (info.get("language") or "").split("-")[0]
+    for cand in ([lang] if lang else []) + ["en"]:
+        if cand in manual:
+            return cand
+    if manual:
+        return next(iter(manual))
+    orig = next((k for k in auto if k.endswith("-orig")), None)
+    return orig or (lang if lang in auto else None) or ("de" if "de" in auto else None) or ("en" if "en" in auto else None)
 
 
 def _downloaded_file(info: dict, work: Path) -> Path | None:

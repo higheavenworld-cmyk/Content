@@ -42,7 +42,31 @@ def from_url(url: str) -> Source:
     text = trafilatura.extract(html, include_comments=False, include_tables=False, favor_precision=True) or ""
     meta = trafilatura.extract_metadata(html)
     title = (meta.title if meta and meta.title else "") or _first(r"<title[^>]*>(.*?)</title>", html)
-    return Source(title=_clean(title), text=text, url=url, image_urls=_article_images(html, url))
+    return Source(title=_clean(title), text=text, url=url, image_urls=_content_images(html, url))
+
+
+def _content_images(html: str, base: str) -> list[str]:
+    """Only pictures that belong to the article itself (main photo + photos inside the text) –
+    no teasers of other articles, author photos, ads or logos."""
+    import trafilatura
+
+    urls: list[str] = []
+    for pat in (r'<meta[^>]+property=["\']og:image(?::url)?["\'][^>]+content=["\']([^"\']+)',
+                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image'):
+        urls += re.findall(pat, html, re.I)[:1]
+    xml = trafilatura.extract(html, output_format="xml", include_images=True, include_comments=False,
+                              favor_precision=True, url=base) or ""
+    urls += [u.replace("&amp;", "&") for u in re.findall(r'<graphic[^>]+src="([^"]+)"', xml)]
+    if len(urls) <= 1:  # nothing found in the text: fall back to <img> tags INSIDE <article> only
+        body = re.search(r"<article.*?</article>", html, re.S | re.I)
+        if body:
+            urls += _article_images(body.group(0), base)
+    out = []
+    for u in urls:
+        u = urljoin(base, u)
+        if u.startswith("http") and not _SKIP.search(u) and u not in out:
+            out.append(u)
+    return out[:20]
 
 
 def from_files(paths: list[str | Path]) -> Source:
