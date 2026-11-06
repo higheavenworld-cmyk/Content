@@ -215,6 +215,20 @@ def _with_ytdlp(url: str, work: Path, log) -> Source | None:
     return src
 
 
+def _downloaded_file(info: dict, work: Path) -> Path | None:
+    for key in ("requested_downloads",):
+        for d in info.get(key) or []:
+            p = Path(d.get("filepath") or "")
+            if p.exists():
+                return p
+    p = Path(info.get("filepath") or info.get("_filename") or "")
+    if p.exists():
+        return p
+    stem = f"{info.get('extractor')}_{info.get('id')}"
+    cands = [c for c in work.glob(stem + ".*") if c.suffix.lower() in VIDEO_EXT]
+    return cands[0] if cands else None
+
+
 def _sub_langs(info: dict) -> list[str]:
     """Subtitle languages to try, best first: German, then YouTube's own German translation of the
     automatic captions (no translation service needed), then the original language."""
