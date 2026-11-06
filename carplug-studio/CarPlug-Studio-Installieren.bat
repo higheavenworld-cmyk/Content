@@ -37,6 +37,11 @@ echo [3/4] Installiere Pakete (das dauert etwas)...
 ".venv\Scripts\python.exe" -m pip install -r requirements.txt
 if errorlevel 1 goto :fail
 
+rem ---------- 3a. Offline-Uebersetzer vorab laden (Englisch -> Deutsch) ----------
+echo [3a] Lade Offline-Uebersetzer (einmalig, ca. 100 MB)...
+".venv\Scripts\python.exe" -c "from studio import offline_mt; offline_mt.ensure('en','de')"
+if errorlevel 1 echo       Hinweis: wird spaeter beim ersten Bedarf automatisch geladen.
+
 rem ---------- 3b. Eigene Stimme: Klon-Modul automatisch mitinstallieren ----------
 if exist "stimmen\*.wav" if not exist ".venv-klon\Scripts\python.exe" (
     echo [3b] Deine Stimme wurde gefunden - Stimmen-Klon wird installiert ^(einmalig, 3-4 GB^)...

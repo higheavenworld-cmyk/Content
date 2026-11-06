@@ -173,7 +173,7 @@ def _with_ytdlp(url: str, work: Path, log) -> Source | None:
         return None
     if (info.get("duration") or 0) > MAX_VIDEO_SECONDS:
         raise ValueError("Das Video ist länger als 30 Minuten – bitte ein kürzeres verwenden.")
-    sub_lang = _pick_sub_lang(info)
+    sub_langs = _sub_langs(info)
     log(f"Video wird geladen: {info.get('title', '')[:60]}…")
     try:
         with yt_dlp.YoutubeDL(ytdlp_opts(work)) as y:
@@ -188,13 +188,15 @@ def _with_ytdlp(url: str, work: Path, log) -> Source | None:
             raise ValueError("Video wurde geladen, aber die Datei fehlt. Bitte erneut versuchen.")
         return None
     segs = []
-    if sub_lang:  # subtitles separately: a subtitle error must not break the video download
+    for lang in sub_langs[:3]:  # subtitles separately: a subtitle error must not break the video download
         try:
             with yt_dlp.YoutubeDL(ytdlp_opts(work, skip_download=True, writesubtitles=True, writeautomaticsub=True,
-                                             subtitleslangs=[sub_lang], subtitlesformat="vtt")) as y:
+                                             subtitleslangs=[lang], subtitlesformat="vtt")) as y:
                 segs = _subtitles(y.extract_info(url, download=True))
         except Exception:
             segs = []
+        if segs:
+            break
     if not segs:
         log("Sprache wird erkannt (keine Untertitel)…")
         segs = transcribe(path)
@@ -213,34 +215,26 @@ def _with_ytdlp(url: str, work: Path, log) -> Source | None:
     return src
 
 
-def _pick_sub_lang(info: dict) -> str | None:
-    """German if available, otherwise the original language (it gets translated later)."""
+def _sub_langs(info: dict) -> list[str]:
+    """Subtitle languages to try, best first: German, then YouTube's own German translation of the
+    automatic captions (no translation service needed), then the original language."""
     manual = info.get("subtitles") or {}
     auto = info.get("automatic_captions") or {}
+    out = []
     if "de" in manual:
-        return "de"
+        out.append("de")
+    if "de" in auto:
+        out.append("de")
     lang = (info.get("language") or "").split("-")[0]
-    for cand in ([lang] if lang else []) + ["en"]:
-        if cand in manual:
-            return cand
-    if manual:
-        return next(iter(manual))
+    if lang and lang in manual:
+        out.append(lang)
     orig = next((k for k in auto if k.endswith("-orig")), None)
-    return orig or (lang if lang in auto else None) or ("de" if "de" in auto else None) or ("en" if "en" in auto else None)
-
-
-def _downloaded_file(info: dict, work: Path) -> Path | None:
-    for key in ("requested_downloads",):
-        for d in info.get(key) or []:
-            p = Path(d.get("filepath") or "")
-            if p.exists():
-                return p
-    p = Path(info.get("filepath") or info.get("_filename") or "")
-    if p.exists():
-        return p
-    stem = f"{info.get('extractor')}_{info.get('id')}"
-    cands = [c for c in work.glob(stem + ".*") if c.suffix.lower() in VIDEO_EXT]
-    return cands[0] if cands else None
+    for k in (orig, lang if lang in auto else None, "en" if "en" in manual else None, "en" if "en" in auto else None):
+        if k:
+            out.append(k)
+    if manual and not out:
+        out.append(next(iter(manual)))
+    return list(dict.fromkeys(out))
 
 
 def _subtitles(info: dict) -> list[tuple[float, float, str]]:

@@ -12,10 +12,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import subprocess
 import threading
 import time
-from pathlib import Path
 
 import requests
 
@@ -104,8 +102,7 @@ def translate_lines(lines: list[str], target: str = "de", log=None) -> list[str]
                 raise TranslationError(
                     "Übersetzung ins Deutsche gerade nicht möglich (" + "; ".join(errors) + "). Die kostenlosen "
                     "Dienste begrenzen kurzzeitig die Anzahl der Anfragen – bitte in 10–15 Minuten erneut versuchen. "
-                    "Bereits übersetzte Teile sind gespeichert. Dauerhaft ohne Limit: Stimmen-Klon installieren "
-                    "(enthält Offline-Übersetzung) oder Ollama installieren.")
+                    "Bereits übersetzte Teile sind gespeichert.")
         return [cache.get(_key(ln, target), ln) if ln.strip() else ln for ln in lines]
 
 
@@ -173,9 +170,8 @@ def _engines(total_chars: int):
     out = []
     if _ollama_running():
         out.append(("lokaler KI (Ollama)", _ollama))
-    out += [("Microsoft Übersetzer", _microsoft), ("Google Übersetzer", _google)]
-    if _offline_available():
-        out.append(("Offline-Übersetzer", _offline))
+    out += [("Microsoft Übersetzer", _microsoft), ("Google Übersetzer", _google),
+            ("Offline-Übersetzer (auf deinem PC)", _offline)]  # always there – works without internet limits
     if total_chars < 3000:
         out.append(("MyMemory", _mymemory))
     return out
@@ -185,15 +181,15 @@ def _short(e: Exception) -> str:
     return re.sub(r"\s+", " ", str(e))[:90]
 
 
-def _retry(fn, tries: int = 3):
-    """Patient retries on 'too many requests': wait 5 s, 15 s, 30 s."""
+def _retry(fn, tries: int = 2):
+    """One short retry on 'too many requests' – then the next service takes over (no long waiting)."""
     for k in range(tries):
         try:
             return fn()
         except RateLimited:
             if k == tries - 1:
                 raise
-            time.sleep((5, 15, 30)[k])
+            time.sleep(3)
 
 
 _EDGE = {"token": "", "at": 0.0}
@@ -302,27 +298,10 @@ def _ollama(lines: list[str], target: str) -> list[str]:
     return out
 
 
-def _offline_available() -> bool:
-    from .voice import clone_python
-    return clone_python() is not None
-
-
 def _offline(lines: list[str], target: str) -> list[str]:
-    """Offline translation (OPUS-MT, runs in the voice-clone environment; model ~300 MB, downloaded once)."""
-    from .voice import clone_python
-    job = WORK_DIR / "translate_job.json"
-    res = WORK_DIR / "translate_result.json"
-    src_lang = "en" if language(" ".join(lines[:50])) == "en" else "mul"
-    job.write_text(json.dumps({"lines": lines, "src": src_lang, "target": target}, ensure_ascii=False),
-                   encoding="utf-8")
-    worker = Path(__file__).with_name("translate_worker.py")
-    p = subprocess.run([str(clone_python()), str(worker), str(job), str(res)], capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", timeout=3600)
-    if p.returncode != 0 or not res.exists():
-        raise RuntimeError((p.stderr or "Offline-Übersetzung fehlgeschlagen")[-200:])
-    out = json.loads(res.read_text(encoding="utf-8"))
-    res.unlink(missing_ok=True)
-    return out
+    """Offline translation on this PC (Argos/OPUS models, downloaded once) – no limits."""
+    from . import offline_mt
+    return offline_mt.translate(lines, target)
 
 
 def _batches(lines: list[str], max_items: int, max_chars: int):
