@@ -121,7 +121,7 @@ def plan_motion(prep: "Prepared", doc: bool) -> None:
     prev_kind = None
     for k, sh in enumerate(shots):
         sh.mg = None
-        if sh.scene == 0:  # the hook keeps its headline cover
+        if k == 0:  # the very first cut is always real footage (strongest scroll-stopper)
             continue
         weak = k < len(sel.weak) and sel.weak[k]
         nxt = shots[k + 1].text.split()[:2] if k + 1 < len(shots) and shots[k + 1].scene == sh.scene else []

@@ -37,6 +37,12 @@ echo [3/4] Installiere Pakete (das dauert etwas)...
 ".venv\Scripts\python.exe" -m pip install -r requirements.txt
 if errorlevel 1 goto :fail
 
+rem ---------- 3b. Eigene Stimme: Klon-Modul automatisch mitinstallieren ----------
+if exist "stimmen\*.wav" if not exist ".venv-klon\Scripts\python.exe" (
+    echo [3b] Deine Stimme wurde gefunden - Stimmen-Klon wird installiert ^(einmalig, 3-4 GB^)...
+    call "%~dp0Stimme-klonen-installieren.bat"
+)
+
 rem ---------- 4. Desktop-Verknuepfung ----------
 echo [4/4] Erstelle Desktop-Verknuepfung...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop')+'\CarPlug Studio.lnk'); $s.TargetPath='%~dp0CarPlug-Studio-Starten.bat'; $s.WorkingDirectory='%~dp0'; $s.IconLocation='%~dp0assets\carplug.ico'; $s.Save()"

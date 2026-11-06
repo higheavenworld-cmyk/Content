@@ -63,8 +63,9 @@ def clone_available() -> bool:
 
 
 def voice_choices() -> list[str]:
+    """Your own voice(s) first – they are the default."""
     clones = [CLONE_PREFIX + p.stem for p in sorted(VOICES_DIR.glob("*.wav"))]
-    return list(VOICES) + clones
+    return clones + list(VOICES)
 
 
 def save_clone_sample(name: str, audio_path: str) -> Path:
@@ -102,7 +103,7 @@ def speech_text(text: str) -> str:
 def polish(src: Path, dst: Path) -> None:
     """Studio sound: remove rumble, gentle compression, a bit of presence, even loudness."""
     chain = ("highpass=f=75,lowpass=f=15000,"
-             "acompressor=threshold=-20dB:ratio=2.5:attack=8:release=120:makeup=2,"
+             "deesser=i=0.3,acompressor=threshold=-20dB:ratio=2.5:attack=8:release=120:makeup=2,"
              "equalizer=f=180:t=q:w=1.2:g=1.5,equalizer=f=3200:t=q:w=1.4:g=2,"
              "loudnorm=I=-16:TP=-1.5:LRA=9")
     subprocess.run([ffmpeg(), "-y", "-loglevel", "error", "-i", str(src), "-af", chain, "-ac", "1", "-ar", str(SR),
@@ -154,6 +155,9 @@ def synth_many(texts: list[str], voice: str, work: Path, rate: str = "+0%",
     """Speak every scene; returns [(samples at 44.1 kHz mono, word timings), ...]."""
     rules = pronunciations()
     texts = [apply_pronunciation(speech_text(t), rules) for t in texts]
+    if voice.startswith(CLONE_PREFIX) and not clone_available():
+        log("Hinweis: Deine Stimme ist noch nicht installiert (Stimme-klonen-installieren.bat) – nutze Florian.")
+        voice = next(iter(VOICES))
     if voice.startswith(CLONE_PREFIX):
         res = _synth_clone(texts, VOICES_DIR / f"{voice[len(CLONE_PREFIX):]}.wav", work, log)
     else:

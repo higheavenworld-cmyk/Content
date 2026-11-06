@@ -75,6 +75,8 @@ def draw_kinetic(frame: Image.Image, chunks, t: float, y_center: float | None = 
     """Words appear exactly when spoken; the current phrase builds up word by word (doc-edit captions)."""
     L = R.L
     y_center = y_center if y_center is not None else L.t + 0.58 * L.sh
+    if chunks and t < chunks[0][0].start:  # the first word is already there in the very first frame
+        t = chunks[0][0].start
     for ci, ch in enumerate(chunks):
         end = chunks[ci + 1][0].start if ci + 1 < len(chunks) else ch[-1].end + 0.35
         if not (ch[0].start - 0.02 <= t < end):

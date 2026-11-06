@@ -71,7 +71,8 @@ Angelehnt an Doku-Edits auf TikTok:
   - Splitscreens
 - **Abwechslungsreiche Übergänge:** Zoom-Kick, Blitz, Glitch, Unschärfe.
 - **Film-Look:** warmes Grading, weiches Leuchten.
-- **Hook:** Die Headline steht etwa 2 Sekunden als Scroll-Stopper, danach geht es Wort für Wort weiter.
+- **Sofortiger Start:** kein Titelbild im Video. Ab dem ersten Frame laufen Footage und Wort-für-Wort-Text.
+  Das Titeldesign gibt es weiterhin als `cover.png` für das Thumbnail.
 
 Unter ⚙️ Einstellungen kannst du auf den klassischen Stil (3 Wörter unten mit Info-Karten), ein ruhigeres
 Schnitt-Tempo oder ohne Film-Look umschalten.
@@ -141,6 +142,10 @@ Die Fehlermeldung sagt jetzt genau, was los ist. Häufig:
 - **Bessere Scripts (lokale KI, kostenlos):** [Ollama](https://ollama.com/download) installieren und einmal in der
   Eingabeaufforderung `ollama pull qwen2.5:7b` ausführen. CarPlug Studio nutzt die KI dann automatisch.
   Empfohlen sind 16 GB RAM.
+- **Deine Stimme ist Standard:** Liegt eine Stimmprobe im Ordner `stimmen`, wird sie automatisch als Standard
+  verwendet, und die Installation richtet das Klon-Modul gleich mit ein. Die Probe wird in Studio-Qualität
+  aufbereitet (Entrauschen, EQ, De-Esser, Kompressor), die erzeugte Stimme ebenso.
+  **Wichtig:** Der Ordner `stimmen` wird nie ins (öffentliche) Repository hochgeladen.
 - **Eigene Stimme klonen:** **`Stimme-klonen-installieren.bat`** ausführen (lädt ca. 3–4 GB), dann im Tab
   „Stimme klonen“ 20–30 Sekunden aufnehmen. Das läuft lokal mit Chatterbox (MIT-Lizenz, kommerziell nutzbar).
   Mit Nvidia-Grafikkarte geht es schnell, ohne dauert es einige Minuten pro Video.

@@ -639,7 +639,11 @@ def _render_unit(u: Unit) -> tuple[int, int]:
     try:
         for k in range(u.k0, u.k1):
             lt = k / FPS
-            if seg.kind == "intro":
+            if seg.kind == "intro" and u.doc:  # the edit starts immediately – no title screen in the video
+                frame = r.body(sources, seg, lt, -1, chunks)
+                if u.cover and abs(lt - 1.0) < 0.5 / FPS:
+                    r.intro(sources, seg, 1.0).save(u.cover)  # the title design is kept for the cover/thumbnail
+            elif seg.kind == "intro":
                 frame = r.intro(sources, seg, lt, chunks)
                 if u.cover and abs(lt - 1.0) < 0.5 / FPS:
                     frame.save(u.cover)
