@@ -465,6 +465,9 @@ class Renderer:
         seed = hash((seg.start, k)) & 0xFFFF
         if kind == "typo":
             frame = motion.typo_card(st)
+        elif kind == "glow":  # own graphic: CarPlug-red glow with particles, the spoken words on top
+            frame = red_glow().copy()
+            motion._particles(frame, lt, seed, (255, 120, 100), 45)
         elif kind == "number":
             frame = motion.number_card(mg.get("text", ""), label_for(mg.get("text", "")), st, seed)
         else:
@@ -781,6 +784,27 @@ def scene_durations(voices, min_total) -> list[float]:
 
 PACES = {"ADHS-Edit – neues Bild ~jede Sekunde": 1.15, "Schnell – alle ~2,5 s": 2.5, "Normal – alle ~4 s": 4.0,
          "Ruhig – ein Bild pro Szene": None}
+
+
+def merge_shots(shots: list[Shot], target: int) -> list[Shot]:
+    """Fewer, slightly longer cuts (merge the shortest neighbours of the same scene) – used when there is
+    not enough different footage, because footage is never shown twice."""
+    shots = list(shots)
+    while len(shots) > target:
+        best = None
+        for k in range(1, len(shots) - 1):
+            a, b = shots[k], shots[k + 1]
+            if a.scene != b.scene:
+                continue
+            if best is None or a.dur + b.dur < best[0]:
+                best = (a.dur + b.dur, k)
+        if best is None:
+            break
+        k = best[1]
+        a, b = shots[k], shots[k + 1]
+        shots[k] = Shot(a.scene, a.start, a.dur + b.dur, (a.text + " " + b.text).strip(), trans=a.trans)
+        del shots[k + 1]
+    return shots
 
 
 def plan_shots(script, voices, durations: list[float], pace: float | None) -> list[Shot]:

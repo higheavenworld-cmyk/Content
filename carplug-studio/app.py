@@ -55,11 +55,11 @@ def selection_view(prep, rows):
     for i in range(len(rows)):
         rows[i][3] = ", ".join(str(n) for n in per_scene.get(i, []) if n)
     chosen = []
-    names = {"typo": "✨ Text-Karte", "number": "✨ Zahlen-Animation", "hud": "✨ HUD-Rahmen", "split": "✨ Splitscreen"}
+    names = {"typo": "✨ Text-Karte", "number": "✨ Zahlen-Animation", "hud": "✨ HUD-Rahmen", "split": "✨ Splitscreen", "glow": "✨ Grafik"}
     for sh, num in zip(prep.shots, prep.sel.nums):
         kind = (sh.mg or {}).get("type")
         label = f"Szene {sh.scene + 1} · ab {sh.start:.1f} s · " + (names.get(kind, "") + " " if kind else "")
-        if kind in ("typo", "number"):
+        if kind in ("typo", "number", "glow"):
             chosen.append((str(footage.mg_preview(kind, prep.work)), label + sh.text[:45]))
         elif num and num in by_num:
             chosen.append((by_num[num], label + f"Nr. {num}: {sh.text[:45]}"))

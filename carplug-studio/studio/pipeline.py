@@ -121,6 +121,15 @@ def plan_motion(prep: "Prepared", doc: bool) -> None:
             ([c for c in imgs if c.topic == "own" and c.subject >= np.median([x.subject for x in imgs])]
              if not sel.smart else []))
     used_nums: set[str] = set()
+    used_imgs = {str(c.path) for c in sel.clips}  # pictures already on screen somewhere
+    missing = sel.missing if sel.missing else [False] * len(shots)
+
+    def unused_safe():
+        for c in safe:
+            if str(c.clean_path) not in used_imgs:
+                used_imgs.add(str(c.clean_path))
+                return c
+        return None
     since, n_mg = 99, 0
     limit = max(1, int(len(shots) * 0.34))
     variety = ["hud", "typo", "split"]
@@ -138,27 +147,28 @@ def plan_motion(prep: "Prepared", doc: bool) -> None:
         keys = [w for w in sh.text.split() if motion.word_style(w) == "key"]
         keyword = max(keys, key=len) if keys else ""
 
-        def safe_hud():
-            c = safe[k % len(safe)]
-            sh.clip = footage.Clip(c.clean_path, "image", c.credit, zoom=1.25, fx=(k % 3) / 2)
+        def safe_hud() -> bool:
+            c = unused_safe()  # only a picture that is not used anywhere else in the video
+            if c is None:
+                return False
+            sh.clip = footage.Clip(c.clean_path, "image", c.credit, zoom=1.15)
             sh.mg = {"type": "hud", "keyword": keyword}
+            return True
 
         if doc and m and m.group(0) not in used_nums and (since >= 2 or weak) and n_mg < limit + 2:
             used_nums.add(m.group(0))
             sh.mg = {"type": "number", "text": m.group(0).strip()}
-        elif weak:  # never show footage that does not fit – alternate the replacements so it stays varied
+        elif weak or (k < len(missing) and missing[k]):  # never wrong or repeated footage
             if doc and keys and prev_kind != "typo":
                 sh.mg = {"type": "typo"}
-            elif safe:
-                safe_hud()
-            else:
-                sh.mg = {"type": "typo"} if doc else None
+            elif not safe_hud():
+                sh.mg = {"type": "typo"} if (doc and prev_kind != "typo") else {"type": "glow"}
         elif doc and since >= 5 and n_mg < limit:
             kind = variety[v % len(variety)]
             v += 1
             if kind == "split":
-                other = next((c for c in safe if str(c.clean_path) != str(sh.clip.path)), None)
-                if other is None or sh.clip.kind != "image":
+                other = unused_safe() if sh.clip.kind == "image" else None
+                if other is None:
                     kind = "hud"
                 else:
                     sh.mg = {"type": "split", "clip2": footage.Clip(other.clean_path, "image", other.credit)}
@@ -192,8 +202,19 @@ def prepare(script: Script, src: extract.Source, voice_name: str, use_article=Tr
     durations = render.scene_durations(voices, min_total)
     shots = render.plan_shots(script, voices, durations, _pace())
     slots = [Scene(sh.text, script.scenes[sh.scene].overlay, script.scenes[sh.scene].query) for sh in shots]
-    sel = footage.collect(slots, [sh.dur for sh in shots], src, work / "footage", size[0] / size[1],
-                          use_article, use_free, bool(s.get("youtube_all")), log)
+    aspect = size[0] / size[1]
+    pool = footage.build_pool(slots, [sh.dur for sh in shots], src, work / "footage", aspect, use_article,
+                              use_free, bool(s.get("youtube_all")), log, has_outro=False)
+    smart = footage.rate_pool(pool, slots, log)
+    cap = footage.unique_capacity(pool, [sh.dur for sh in shots])
+    allowed = int(cap / 0.65) + 1  # up to ~1/3 of the cuts may be own graphics; footage is never repeated
+    if len(shots) > allowed:
+        before = len(shots)
+        shots = render.merge_shots(shots, allowed)
+        slots = [Scene(sh.text, script.scenes[sh.scene].overlay, script.scenes[sh.scene].query) for sh in shots]
+        log(f"Genug verschiedenes Footage für {cap} Schnitte gefunden – Schnitte von {before} auf {len(shots)} "
+            f"angepasst, damit sich nichts wiederholt.")
+    sel = footage.assign(pool, slots, [sh.dur for sh in shots], aspect, smart, {}, log, has_outro=False)
     for sh, clip in zip(shots, sel.clips):
         sh.clip = clip
     prep = Prepared(_key(script, voice_name, use_article, use_free, target, size), src, voice_name, target,

@@ -74,6 +74,7 @@ class Cand:
     video: clean.VideoInfo | None = None
     transcript: list = field(default_factory=list)
     used: list = field(default_factory=list)  # used (start, end) parts of a video
+    used_embs: list = field(default_factory=list)  # what the used video parts look like (no look-alike parts)
     uses: int = 0
     dhash: int | None = None
     num: int = 0                          # number shown to the user (1, 2, 3 …)
@@ -92,7 +93,8 @@ class Selection:
     pool: list[Cand]
     smart: bool                   # True = image understanding was used
     weak: list = field(default_factory=list)    # per slot: footage does not clearly fit -> own motion graphic
-    reused: list = field(default_factory=list)  # per slot: picture had to be reused
+    reused: list = field(default_factory=list)  # kept for compatibility (footage is never reused now)
+    missing: list = field(default_factory=list)  # per slot: no unused footage left -> own motion graphic
 
 
 # --- public entry --------------------------------------------------------------
@@ -129,7 +131,7 @@ def build_pool(scenes, durations, src, work: Path, aspect: float, use_article=Tr
         use_free = False
     if use_free:  # always add free footage – own creative mix, not only the link's material
         for q, kind in _queries(scenes):
-            if _capacity(pool, durations) >= n_needed * 2.5:  # plenty of choice so the AI can be strict
+            if _capacity(pool, durations) >= n_needed * 1.6:  # enough different material + room to be strict
                 break
             log(f"Suche Footage: „{q}“…")
             pool += _prepare_all(_search(q, work, youtube_all, kind), work, aspect, lock)
@@ -170,7 +172,26 @@ def rate_pool(pool: list[Cand], scenes, log=print) -> bool:
         sims = np.sort(c.emb @ t_subj)[::-1]
         c.subject = float(sims[: max(1, len(sims) // 3)].mean())  # video: its best third of frames
     _check_cars(pool, subject, log)
+    _drop_lookalikes(pool, log)
     return True
+
+
+def _drop_lookalikes(pool: list[Cand], log) -> None:
+    """The same photo in another size/crop from another website counts as the same footage -> keep one."""
+    order = sorted(pool, key=lambda c: ({"own": 0, "subject": 1, "topic": 2}.get(c.topic, 3), c.num))
+    kept: list[np.ndarray] = []
+    dropped = 0
+    for c in order:
+        if c.emb is None or not len(c.emb):
+            continue
+        v = vision._norm(c.emb.mean(axis=0))
+        if any(float(v @ k) > (0.97 if c.kind == "video" else 0.95) for k in kept):
+            pool.remove(c)
+            dropped += 1
+            continue
+        kept.append(v)
+    if dropped:
+        log(f"{dropped} doppelte(s) Bild/Video entfernt (gleiches Motiv aus anderer Quelle).")
 
 
 DISTRACTORS = ["Mercedes-Benz S-Class", "Mercedes-Benz G-Class", "Audi A8", "Audi Q7", "Porsche 911", "Porsche Taycan",
@@ -223,7 +244,7 @@ def assign(pool: list[Cand], scenes, durations, aspect: float, smart: bool, over
     """Give every scene the best fitting footage overall (not just the first good one), never twice.
     overrides: {scene index: footage number} chosen by the user."""
     for c in pool:
-        c.used, c.uses = [], 0
+        c.used, c.uses, c.used_embs = [], 0, []
     n = len(scenes)
     last = n - 1 if has_outro else n  # outro: logo screen, no footage
     by_num = {c.num: c for c in pool}
@@ -241,7 +262,7 @@ def assign(pool: list[Cand], scenes, durations, aspect: float, smart: bool, over
         chosen[i] = (c, *(plan or (None, None)))
         c.uses += 1
         if plan:
-            c.used.append((plan[0], plan[0] + durations[i]))
+            _mark_used(c, plan[0], durations[i])
 
     max_share = max(2, int(0.4 * last))  # no single link video may dominate (own edit, not a re-upload)
 
@@ -273,29 +294,22 @@ def assign(pool: list[Cand], scenes, durations, aspect: float, smart: bool, over
             continue
         chosen[i] = (c, *plan)
         c.uses += 1
-        c.used.append((plan[0], plan[0] + min(durations[i], c.video.dur)))
+        _mark_used(c, plan[0], min(durations[i], c.video.dur))
 
-    reused = 0
-    for i in range(last):  # 3) not enough material: reuse a picture mirrored, never the neighbour's
-        if i in chosen:
-            continue
-        neighbours = {chosen[j][0].num for j in (i - 1, i + 1) if j in chosen}
-        options = [c for c in pool if c.num not in neighbours] or pool
-        c = min(options, key=lambda x: (x.uses, -_pair_score(x, i, fits, smart, scenes[i])))
-        c.uses += 1
-        reused += 1
-        if c.kind == "image":
-            chosen[i] = (c, None, None, c.uses)
-        else:
-            c.used.clear()
-            plan = _video_plan(c, i, durations[i], aspect, fits, smart, scenes[i].text)
-            chosen[i] = (c, *(plan or (0.0, clean.VideoCut(0.0, (0, 0, c.video.w, c.video.h)))), c.uses)
-    if reused:
-        log(f"Hinweis: Zu wenig unterschiedliches Material – {reused} Schnitt(e) zeigen einen anderen Ausschnitt "
-            f"eines schon genutzten Bildes. Mehr Links/Bilder = mehr Abwechslung.")
+    missing = [i for i in range(last) if i not in chosen]  # 3) never reuse – these cuts get own graphics
+    if missing:
+        log(f"Hinweis: Für {len(missing)} Schnitt(e) gibt es kein weiteres unterschiedliches Footage – dort kommen "
+            f"eigene Grafiken (nie ein doppeltes Bild).")
+    placeholder = next((c for c in pool if c.kind == "image"), pool[0])
+    for i in missing:
+        chosen[i] = (placeholder, None, None)
 
     weak, reused_flags = [], []
     for i in range(last):
+        if i in missing:
+            weak.append(True)
+            reused_flags.append(False)
+            continue
         c = chosen[i][0]
         fit = _fit_only(c, i, fits) if smart else 0.0
         said = c.kind == "video" and _transcript_time(c, scenes[i].text) is not None
@@ -313,6 +327,9 @@ def assign(pool: list[Cand], scenes, durations, aspect: float, smart: bool, over
             continue
         c, start, cut, *rep_n = chosen[i]
         zoom, fx, flip = variants[(rep_n[0] - 1) % len(variants)] if rep_n else (1.0, 0.5, False)
+        if c.kind == "video" and cut is None:  # placeholder for a missing cut (never shown)
+            plan = _video_plan(c, i, durations[i], aspect, None, False, "")
+            start, cut = plan or (0.0, clean.VideoCut(0.0, (0, 0, c.video.w, c.video.h)))
         if c.kind == "image":
             clips.append(Clip(c.clean_path, "image", c.credit, flip=flip, zoom=zoom, fx=fx))
         else:
@@ -321,9 +338,11 @@ def assign(pool: list[Cand], scenes, durations, aspect: float, smart: bool, over
         nums.append(c.num)
         if c.credit and c.credit not in credits:
             credits.append(c.credit)
-    log(f"Footage: {len(set(nums) - {0})} verschiedene Bilder/Videos für {last} Schnitte"
+    mset = set(missing)
+    nums = [0 if i in mset else n for i, n in enumerate(nums)]
+    log(f"Footage: {last - len(missing)} Schnitte mit jeweils anderem Bild/Videoteil (nichts doppelt)"
         + (" (KI-Bildverständnis)." if smart else " (Stichworte)."))
-    return Selection(clips, nums, credits, pool, smart, weak, reused_flags)
+    return Selection(clips, nums, credits, pool, smart, weak, reused_flags, [i in mset for i in range(last)])
 
 
 def _fit_only(c: Cand, i: int, fits) -> float:
@@ -396,10 +415,30 @@ def _video_plan(c: Cand, i: int, dur: float, aspect: float, fits, smart: bool, t
     for s in starts:
         if any(s < b and a < s + need for a, b in c.used):
             continue
+        e = _seg_emb(c, s, need)
+        if e is not None and any(float(e @ u) > 0.92 for u in c.used_embs):
+            continue  # looks like a part we already used -> would feel like the same footage
         cut = clean.plan_cut(v, s, need, aspect)
         if cut:
             return s, cut
     return None
+
+
+def _seg_emb(c: Cand, start: float, dur: float):
+    """What a part of a video looks like (mean of its sampled frames), for the look-alike check."""
+    if c.emb is None or not len(c.emb) or not c.video or not c.video.samples:
+        return None
+    idx = [k for k, (t, _) in enumerate(c.video.samples) if start - 0.5 <= t <= start + dur + 0.5 and k < len(c.emb)]
+    if not idx:
+        return None
+    return vision._norm(c.emb[idx].mean(axis=0))
+
+
+def _mark_used(c: Cand, start: float, dur: float) -> None:
+    c.used.append((start, start + dur))
+    e = _seg_emb(c, start, dur)
+    if e is not None:
+        c.used_embs.append(e)
 
 
 def mg_preview(kind: str, work: Path) -> Path:
@@ -477,8 +516,31 @@ def _prepare(c: Cand, work: Path, aspect: float) -> Cand | None:
 
 
 def _capacity(pool: list[Cand], durations: list[float]) -> float:
-    avg = max(np.mean(durations), 2.0) if durations else 4.0
-    return sum(1 if c.kind == "image" else c.video.dur / avg for c in pool)
+    """How many DIFFERENT cuts the material can fill (each picture once, each video a few distinct parts)."""
+    avg = max(float(np.mean(durations)), 1.0) if durations else 2.0
+    return sum(1 if c.kind == "image" else min(8, int(c.video.dur / max(avg * 2.5, 2.5)) + 1) for c in pool)
+
+
+def unique_capacity(pool: list[Cand], durations: list[float]) -> int:
+    """Realistic number of different cuts: pictures once each; for videos the AI counts how many moments
+    really look different (a long pan over the same car is only one or two different shots)."""
+    avg = max(float(np.mean(durations)), 1.0) if durations else 2.0
+    total = 0
+    for c in pool:
+        if c.kind == "image":
+            total += 1
+            continue
+        by_time = min(8, int(c.video.dur / max(avg * 2.5, 2.5)) + 1)
+        if c.emb is None or not len(c.emb):
+            total += by_time
+            continue
+        distinct: list[np.ndarray] = []
+        for e in c.emb:
+            v = vision._norm(e)
+            if all(float(v @ d) <= 0.92 for d in distinct):
+                distinct.append(v)
+        total += min(by_time, len(distinct))
+    return total
 
 
 def _dhash(p: Path) -> int:
@@ -514,6 +576,10 @@ def _transcript_time(c: Cand, text: str) -> float | None:
 
 
 # --- searching -------------------------------------------------------------------------
+ANGLES = ["front", "rear", "side view", "interior", "dashboard", "steering wheel", "seats", "wheel", "headlights",
+          "taillights", "engine", "driving", "on the road", "detail", "exterior", "cockpit", "trunk", "night"]
+
+
 def _queries(slots) -> list[tuple[str, str]]:
     """Searches: the exact subject (e.g. 'BMW 7 Series' + interior/front/…) and one sub-topic per cut
     (the key word that is spoken, translated to English, e.g. 'Panzerglas' -> 'bulletproof glass').
@@ -528,6 +594,8 @@ def _queries(slots) -> list[tuple[str, str]]:
                 if re.search(pat, sl.text.lower()):
                     out.append((f"{base} {en}", "subject"))
                     break
+        for angle in ANGLES:  # many different views of the same car -> enough different footage
+            out.append((f"{base} {angle}", "subject"))
     words: list[str] = []
     for sl in slots:
         keys = [re.sub(r"[^\wäöüÄÖÜß-]", "", w) for w in sl.text.split() if motion.word_style(w) == "key"]
@@ -552,7 +620,7 @@ def _queries(slots) -> list[tuple[str, str]]:
 
 def _search(q: str, work: Path, youtube_all: bool, kind: str = "subject") -> list[Cand]:
     found: list[Cand] = []
-    jobs = [lambda: _commons(q, "bitmap", 6), lambda: _openverse(q, 6)]
+    jobs = [lambda: _commons(q, "bitmap", 10), lambda: _openverse(q, 10)]
     if kind == "subject":  # videos only for the exact subject (sub-topics: pictures)
         jobs += [lambda: _youtube(q, work, 3, cc_only=not youtube_all), lambda: _commons(q, "video", 2)]
     with ThreadPoolExecutor(max_workers=4) as ex:
