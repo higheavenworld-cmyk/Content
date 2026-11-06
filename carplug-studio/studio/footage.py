@@ -79,6 +79,8 @@ class Cand:
     num: int = 0                          # number shown to the user (1, 2, 3 …)
     emb: np.ndarray | None = None         # image understanding: one vector (image) or one per sample (video)
     subject: float = 0.0                  # how clearly it shows the topic (e.g. the car)
+    topic: str = "own"                    # own (link/upload/article) | subject | topic search
+    shows: str = ""                       # what the AI thinks it shows: subject | other-car | other
 
 
 @dataclass
@@ -89,6 +91,8 @@ class Selection:
     credits: list[str]
     pool: list[Cand]
     smart: bool                   # True = image understanding was used
+    weak: list = field(default_factory=list)    # per slot: footage does not clearly fit -> own motion graphic
+    reused: list = field(default_factory=list)  # per slot: picture had to be reused
 
 
 # --- public entry --------------------------------------------------------------
@@ -117,12 +121,15 @@ def build_pool(scenes, durations, src, work: Path, aspect: float, use_article=Tr
     pool = _prepare_all(pool, work, aspect, lock)
     log(f"{len(pool)} saubere Bilder/Videos aus deinen Quellen.")
     n_needed = max(len(scenes) - (1 if has_outro else 0), 1)
-    if use_free and _capacity(pool, durations) < n_needed * 1.6:
-        for q in _queries(scenes):
-            if _capacity(pool, durations) >= n_needed * 2.2:  # extra choice so the AI can pick
+    if use_free and not vision.available():
+        log("Freies Footage wird nur mit KI-Bildverständnis gesucht (sonst Fehlergefahr) – nutze nur deine Quellen.")
+        use_free = False
+    if use_free:  # always add free footage – own creative mix, not only the link's material
+        for q, kind in _queries(scenes):
+            if _capacity(pool, durations) >= n_needed * 2.5:  # plenty of choice so the AI can be strict
                 break
             log(f"Suche Footage: „{q}“…")
-            pool += _prepare_all(_search(q, work, youtube_all), work, aspect, lock)
+            pool += _prepare_all(_search(q, work, youtube_all, kind), work, aspect, lock)
     if not pool:
         raise RuntimeError("Kein sauberes Bildmaterial gefunden. Lade eigene Bilder/Videos hoch oder nutze andere Links.")
     for i, c in enumerate(pool, 1):
@@ -159,17 +166,52 @@ def rate_pool(pool: list[Cand], scenes, log=print) -> bool:
             continue
         sims = np.sort(c.emb @ t_subj)[::-1]
         c.subject = float(sims[: max(1, len(sims) // 3)].mean())  # video: its best third of frames
-    vals = np.array([c.subject for c in pool])
-    keep_min = max(len(scenes) - 1, 1)
-    if len(pool) > keep_min and vals.std() > 1e-4:
-        z = (vals - vals.mean()) / vals.std()
-        off = [c for c, zz in zip(pool, z) if zz < -1.0 and c.origin != "upload"]
-        off = sorted(off, key=lambda c: c.subject)[: max(0, len(pool) - keep_min)]
-        if off:
-            log(f"{len(off)} unpassende(s) Bild/Video aussortiert (zeigt nicht „{subject}“).")
-            for c in off:
-                pool.remove(c)
+    _check_cars(pool, subject, log)
     return True
+
+
+DISTRACTORS = ["Mercedes-Benz S-Class", "Mercedes-Benz G-Class", "Audi A8", "Audi Q7", "Porsche 911", "Porsche Taycan",
+               "Tesla Model 3", "Tesla Model S", "Volkswagen Golf", "Volkswagen ID.4", "Toyota Corolla", "Ford Mustang",
+               "Range Rover", "Rolls-Royce Phantom", "Ferrari", "Lamborghini", "BMW 3 Series", "BMW X5", "BMW i4",
+               "Hyundai Ioniq 5", "Kia EV6", "BYD Seal", "Volvo XC90", "Mini Cooper", "Fiat 500", "Skoda Octavia"]
+NON_CAR = ["Foto einer Person", "Foto eines Gebäudes", "Foto einer Landschaft", "Foto eines technischen Details",
+           "Foto eines Gegenstands", "Grafik mit Text oder Logo"]
+
+
+def _check_cars(pool: list[Cand], subject: str, log) -> None:
+    """Free footage must show exactly the right car (or no car at all for sub-topics like 'bulletproof glass'),
+    and must look like the car in your own links. Wrong model / wrong generation -> removed."""
+    if not subject:
+        return
+    s_low = subject.lower()
+    others = [d for d in DISTRACTORS if d.lower() not in s_low and s_low.split(" ")[-1] not in d.lower()]
+    labels = [f"Foto eines {subject}"] + [f"Foto eines {d}" for d in others] + NON_CAR
+    t = vision.embed_texts(labels)
+    own = [c for c in pool if c.topic == "own" and c.emb is not None and len(c.emb)]
+    centroid = None
+    if own:
+        centroid = vision._norm(np.mean([c.emb.mean(axis=0) for c in own], axis=0))
+        own_cons = sorted(float((c.emb.mean(axis=0) @ centroid)) for c in own)
+        min_cons = own_cons[max(0, len(own_cons) // 5)] - 0.06
+    removed_wrong = removed_style = 0
+    for c in list(pool):
+        if c.emb is None or not len(c.emb):
+            continue
+        sims = c.emb.mean(axis=0) @ t.T
+        best = int(np.argmax(sims))
+        c.shows = "subject" if best == 0 else ("other-car" if best <= len(others) else "other")
+        if c.topic == "own":
+            continue  # your links/uploads are the reference
+        if c.shows == "other-car":
+            pool.remove(c)
+            removed_wrong += 1
+            continue
+        if c.shows == "subject" and centroid is not None and float(c.emb.mean(axis=0) @ centroid) < min_cons:
+            pool.remove(c)  # right model name, but looks different from the car in your link (generation/colour)
+            removed_style += 1
+    if removed_wrong or removed_style:
+        log(f"Aussortiert: {removed_wrong} Bild(er) mit falschem Auto/Motiv, {removed_style} passen optisch nicht "
+            f"zum Footage aus deinem Link.")
 
 
 # --- assignment ----------------------------------------------------------------------
@@ -198,6 +240,12 @@ def assign(pool: list[Cand], scenes, durations, aspect: float, smart: bool, over
         if plan:
             c.used.append((plan[0], plan[0] + durations[i]))
 
+    max_share = max(2, int(0.4 * last))  # no single link video may dominate (own edit, not a re-upload)
+
+    def too_many_in_row(i: int, c: Cand) -> bool:
+        same = lambda j: j in chosen and chosen[j][0] is c  # noqa: E731
+        return (same(i - 1) and same(i - 2)) or (same(i + 1) and same(i + 2)) or (same(i - 1) and same(i + 1))
+
     heap = []  # 2) best (scene, footage) pairs first
     for i in range(last):
         if i in chosen:
@@ -214,6 +262,8 @@ def assign(pool: list[Cand], scenes, durations, aspect: float, smart: bool, over
                 continue
             chosen[i] = (c, None, None)
             c.uses += 1
+            continue
+        if too_many_in_row(i, c) or (c.topic == "own" and c.uses >= max_share):
             continue
         plan = _video_plan(c, i, durations[i], aspect, fits, smart, scenes[i].text)
         if plan is None:
@@ -241,6 +291,14 @@ def assign(pool: list[Cand], scenes, durations, aspect: float, smart: bool, over
         log(f"Hinweis: Zu wenig unterschiedliches Material – {reused} Schnitt(e) zeigen einen anderen Ausschnitt "
             f"eines schon genutzten Bildes. Mehr Links/Bilder = mehr Abwechslung.")
 
+    weak, reused_flags = [], []
+    for i in range(last):
+        c = chosen[i][0]
+        fit = _fit_only(c, i, fits) if smart else 0.0
+        said = c.kind == "video" and _transcript_time(c, scenes[i].text) is not None
+        weak.append(bool(smart and not said and i not in overrides and fit < -0.15))
+        reused_flags.append(len(chosen[i]) > 3)
+
     clips, nums, credits = [], [], []
     variants = [(1.0, 0.5, False), (1.45, 0.25, False), (1.45, 0.75, True), (1.8, 0.5, False), (1.3, 0.1, True)]
     for i in range(n):
@@ -261,7 +319,15 @@ def assign(pool: list[Cand], scenes, durations, aspect: float, smart: bool, over
             credits.append(c.credit)
     log(f"Footage: {len(set(nums) - {0})} verschiedene Bilder/Videos für {last} Schnitte"
         + (" (KI-Bildverständnis)." if smart else " (Stichworte)."))
-    return Selection(clips, nums, credits, pool, smart)
+    return Selection(clips, nums, credits, pool, smart, weak, reused_flags)
+
+
+def _fit_only(c: Cand, i: int, fits) -> float:
+    """How well the picture shows what is said in slot i (z-score, 0 = average)."""
+    if fits is None or c.num not in fits:
+        return 0.0
+    col = fits[c.num][:, i]
+    return float(np.sort(col)[::-1][: max(1, len(col) // 4)].mean())
 
 
 def _fit_matrix(pool, scenes, smart):
@@ -330,6 +396,20 @@ def _video_plan(c: Cand, i: int, dur: float, aspect: float, fits, smart: bool, t
         if cut:
             return s, cut
     return None
+
+
+def mg_preview(kind: str, work: Path) -> Path:
+    """Small placeholder picture for motion-graphic cuts in the preview gallery."""
+    dst = work / "vorschau" / f"mg_{kind}.jpg"
+    if not dst.exists():
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        from PIL import ImageDraw
+        im = Image.new("RGB", (240, 360), (243, 239, 231) if kind == "typo" else (20, 10, 10))
+        d = ImageDraw.Draw(im)
+        d.text((20, 160), "Text-Karte" if kind == "typo" else "123 PS", fill=(30, 30, 30) if kind == "typo" else
+               (255, 70, 60))
+        im.save(dst, quality=85)
+    return dst
 
 
 def thumbnails(sel: Selection, work: Path) -> list[tuple[str, str]]:
@@ -430,30 +510,51 @@ def _transcript_time(c: Cand, text: str) -> float | None:
 
 
 # --- searching -------------------------------------------------------------------------
-def _queries(scenes) -> list[str]:
-    """One search per scene: model + what the sentence is about (interior, engine, …), then broader."""
-    out = []
-    base = next((s.query for s in scenes if s.query), "")
-    for sc in scenes:
-        q = sc.query or base
-        for pat, en in TOPICS.items():
-            if re.search(pat, sc.text.lower()):
-                q = f"{(sc.query or base)} {en}".strip()
-                break
-        if q and q not in out:
-            out.append(q)
+def _queries(slots) -> list[tuple[str, str]]:
+    """Searches: the exact subject (e.g. 'BMW 7 Series' + interior/front/…) and one sub-topic per cut
+    (the key word that is spoken, translated to English, e.g. 'Panzerglas' -> 'bulletproof glass').
+    No generic car searches – they bring the wrong cars."""
+    from . import motion, translate
+    base = subject_of(slots)
+    out: list[tuple[str, str]] = []
     if base:
-        out.append(base.split(" ")[0] + " car")
-    out += ["sports car driving", "car on highway", "luxury car"]
-    return list(dict.fromkeys(out))
+        out.append((base, "subject"))
+        for sl in slots:
+            for pat, en in TOPICS.items():
+                if re.search(pat, sl.text.lower()):
+                    out.append((f"{base} {en}", "subject"))
+                    break
+    words: list[str] = []
+    for sl in slots:
+        keys = [re.sub(r"[^\wäöüÄÖÜß-]", "", w) for w in sl.text.split() if motion.word_style(w) == "key"]
+        keys = [k for k in keys if len(k) >= 4 and k.lower() not in base.lower()]
+        if keys:
+            words.append(max(keys, key=len))
+    words = list(dict.fromkeys(words))[:14]
+    if words:
+        en = translate.to_english("\n".join(words)).split("\n")
+        en = en if len(en) == len(words) else words
+        for w in en:
+            w = w.strip()
+            if w:
+                out.append((w, "topic"))
+    seen, uniq = set(), []
+    for q, kind in out:
+        if q.lower() not in seen:
+            seen.add(q.lower())
+            uniq.append((q, kind))
+    return uniq
 
 
-def _search(q: str, work: Path, youtube_all: bool) -> list[Cand]:
+def _search(q: str, work: Path, youtube_all: bool, kind: str = "subject") -> list[Cand]:
     found: list[Cand] = []
+    jobs = [lambda: _commons(q, "bitmap", 6), lambda: _openverse(q, 6)]
+    if kind == "subject":  # videos only for the exact subject (sub-topics: pictures)
+        jobs += [lambda: _youtube(q, work, 3, cc_only=not youtube_all), lambda: _commons(q, "video", 2)]
     with ThreadPoolExecutor(max_workers=4) as ex:
-        for res in ex.map(lambda f: f(), [lambda: _youtube(q, work, 3, cc_only=not youtube_all),
-                                          lambda: _commons(q, "bitmap", 6), lambda: _commons(q, "video", 2),
-                                          lambda: _openverse(q, 6)]):
+        for res in ex.map(lambda f: f(), jobs):
+            for c in res:
+                c.topic = kind
             found += res
     return found
 

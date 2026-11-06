@@ -58,6 +58,36 @@ Bei Hochformat bleiben alle Texte außerhalb der App-Bedienelemente (Buttons rec
 | Aussprache | „CarPlug“ und „News“ werden englisch gesprochen. Die Liste ist unter Einstellungen erweiterbar, die Untertitel zeigen trotzdem das geschriebene Wort |
 | Motion Graphics | Intro im Thumbnail-Look, Info-Karten mit hochzählenden Zahlen, Story-Fortschrittsbalken, rote Übergänge, Outro |
 
+## ADHS-Edit (Standard-Stil)
+
+Angelehnt an Doku-Edits auf TikTok:
+- **Neues Bild etwa jede Sekunde.** Jeder Schnitt zeigt, was in diesem Moment gesagt wird.
+- **Wort-für-Wort-Untertitel** in der Bildmitte: Schlüsselwörter groß in eleganter Serifenschrift
+  (Instrument Serif), Füllwörter klein, Zahlen fett in CarPlug-Rot.
+- **Eigene Motion Graphics** (der kreative CarPlug-Anteil, nicht zu viel, höchstens etwa ein Drittel):
+  - Zahlen-Animationen („612 PS“ zählt hoch)
+  - Text-Karten auf Papier-Optik
+  - HUD-Rahmen (Footage in einem animierten Technik-Rahmen)
+  - Splitscreens
+- **Abwechslungsreiche Übergänge:** Zoom-Kick, Blitz, Glitch, Unschärfe.
+- **Film-Look:** warmes Grading, weiches Leuchten.
+- **Hook:** Die Headline steht etwa 2 Sekunden als Scroll-Stopper, danach geht es Wort für Wort weiter.
+
+Unter ⚙️ Einstellungen kannst du auf den klassischen Stil (3 Wörter unten mit Info-Karten), ein ruhigeres
+Schnitt-Tempo oder ohne Film-Look umschalten.
+
+## 100 % passendes Footage – keine Fehler
+
+- **Unterthema pro Schnitt:** Für jeden Schnitt wird nach seinem Stichwort gesucht, z. B. „Panzerglas“ →
+  „bulletproof glass“, nicht nur nach dem Hauptthema.
+- **Falsches Auto = raus.** Die KI vergleicht jedes freie Bild mit dem Thema und mit über 20 anderen Modellen.
+  Zeigt es ein anderes Auto, wird es nicht verwendet. Freies Footage vom Thema-Auto muss außerdem optisch zum
+  Footage aus deinem Link passen (gleiche Generation und Farbe).
+- **Passt für einen Schnitt nichts sicher**, kommt dort eine eigene Motion Graphic statt eines unpassenden Bildes.
+- **Ohne KI-Bildverständnis** wird gar kein freies Footage verwendet, nur deine Links und Uploads.
+- **Nicht einfach übernommen:** höchstens zwei Schnitte am Stück aus demselben Video, höchstens 40 % aus einem
+  einzelnen Link-Video. Freies Footage und eigene Grafiken werden immer dazugemischt.
+
 ## Retention: damit die Leute dranbleiben
 
 - **Hook in der ersten Sekunde:** Die Headline ist ab dem ersten Frame sichtbar, mit Einschlag-Sound.
@@ -65,7 +95,7 @@ Bei Hochformat bleiben alle Texte außerhalb der App-Bedienelemente (Buttons rec
 - **Payoff am Ende:** Der stärkste Fakt (z. B. der Preis) kommt zum Schluss und löst den Open Loop auf.
 - **Re-Hooks** zwischendurch („Aber jetzt wird's richtig spannend:“).
 - **Kurze, gesprochene Sätze** statt langer Artikelsätze.
-- **Schnelle Schnitte:** Das Bild wechselt etwa alle 2,5 Sekunden, mit Zoom-Kick, auch während des Hooks.
+- **Schnelle Schnitte:** Im ADHS-Edit etwa jede Sekunde ein neues Bild, auch während des Hooks.
   Einstellbar unter „Schnitt-Tempo“.
 - **Zahlen** leuchten in den Untertiteln rot, die Info-Karten zählen hoch.
 - **Kurzes Outro.**

@@ -23,6 +23,8 @@ LOGO_RED = (203, 45, 34)
 GREY = (190, 190, 190)
 FONT_HEADLINE = FONTS / "DejaVuSansCondensed-BoldOblique.ttf"
 FONT_BOLD = FONTS / "DejaVuSansCondensed-Bold.ttf"
+FONT_SERIF = FONTS / "InstrumentSerif-Regular.ttf"          # elegant serif for key words (doc-edit look)
+FONT_SERIF_ITALIC = FONTS / "InstrumentSerif-Italic.ttf"
 LOGO_FILE = ASSETS / "logo_source.jpg"
 BRAND_URL = "CARPLUG.ONLINE"
 BRAND_HASHTAGS = ["#carplug", "#autonews", "#auto", "#cars"]
@@ -67,6 +69,8 @@ DEFAULT_SETTINGS = {
     "cookies_browser": "",               # browser with your Instagram/TikTok login (only if a link needs it)
     # pronunciation: written word = how it should sound (German letters). Subtitles keep the written word.
     "aussprache": "CarPlug = Kahr Plagg\nNews = Njuhs",
+    "caption_style": "Doku – Wort für Wort in der Mitte",
+    "look": True,                        # film look: warm grade + soft glow
     "music_on": False,                   # background music (off: voice + sound effects only)
     "music_volume": 0.18,
     "speech_rate": "+0%",

@@ -21,8 +21,10 @@ from .config import BLACK, BRAND_URL, FONT_BOLD, FONT_HEADLINE, FPS, GREY, LOGO_
 from .footage import Clip
 from .tools import probe
 from .voice import SR, Word, ffmpeg, write_wav
+from . import motion  # noqa: E402  (doc-edit layer)
 
 GAP = 0.12            # pause between scenes (seconds)
+HEADLINE_SECONDS = 1.9  # doc edit: the cover headline stays this long, then word-by-word captions take over
 LEAD = 0.27           # GAP + small breath after every intro/body scene
 OUTRO_TAIL = 0.6      # logo stays this long after the last word (short = better retention)
 MAX_PAUSE = 0.6       # extra pause per scene allowed to reach a minimum length
@@ -63,6 +65,9 @@ def set_layout(w: int, h: int) -> None:
     L = Layout(w, h)
     for fn in (vgradient, vignette, red_glow, subtitle_img):
         fn.cache_clear()
+    from . import motion
+    for fn in (motion.paper, motion.hud_grid, motion.word_img):
+        fn.cache_clear()
 
 
 @dataclass
@@ -73,6 +78,8 @@ class Shot:
     dur: float
     text: str             # what is said during this shot (used to pick fitting footage)
     clip: Clip | None = None
+    mg: dict | None = None    # own motion graphic instead of / around footage: {"type": typo|number|hud|split, …}
+    trans: str = "punch"      # transition into this shot
 
 
 @dataclass
@@ -360,7 +367,9 @@ def draw_subtitles(frame: Image.Image, chunks: list[list[Word]], t: float) -> No
 
 # --- renderer -------------------------------------------------------------------------
 class Renderer:
-    def __init__(self, headline: list[str], subline: str, topic: str, n_body: int):
+    def __init__(self, headline: list[str], subline: str, topic: str, n_body: int, doc: bool = False,
+                 look: bool = False):
+        self.doc, self.look = doc, look  # doc = word-by-word captions + own motion graphics (doc-edit style)
         self.headline = [h.strip().upper() for h in headline if h.strip()]
         self.subline = subline.strip().upper()
         self.n_body = max(n_body, 1)
@@ -411,11 +420,26 @@ class Renderer:
         if self.chip_topic:
             paste(frame, self.chip_topic, (L.l + self.chip_brand.width + L.px(12), y))
 
-    def intro(self, sources, seg: Segment, lt: float) -> Image.Image:
+    def intro(self, sources, seg: Segment, lt: float, chunks=None) -> Image.Image:
         k, shot = current_shot(seg, lt)  # the hook also changes pictures; the headline stays
         st = lt - shot.start
         frame = sources(k).frame(st / max(shot.dur, 0.1), 0.07 * (1 - ease(st / 0.35)) if k else 0.0).copy()
+        if self.look:
+            frame = motion.film_look(frame)
+        if k:
+            frame = motion.apply_transition(frame, shot.trans, st)
         frame.paste(self.shade_intro, (0, 0), self.shade_intro)
+        if self.doc and lt > HEADLINE_SECONDS:  # ADHS edit: headline only as scroll-stopper, then captions
+            fade = ease((lt - HEADLINE_SECONDS) / 0.25)
+            if fade >= 1:
+                frame.paste(self.shade_body, (0, 0), self.shade_body)
+                if chunks:
+                    motion.draw_kinetic(frame, chunks, lt)
+                cy = L.t + L.px(26)
+                paste(frame, self.chip_brand, (L.l, cy))
+                paste(frame, self.chip_news, (L.l + self.chip_brand.width + L.px(12), cy))
+                return frame
+        out = 1 - ease((lt - HEADLINE_SECONDS) / 0.25) if self.doc else 1.0
         block_h = len(self.head_layers) * self.head_step + (self.sub_layer.height + L.px(20) if self.sub_layer else 0)
         y = L.b - block_h - L.px(10)
         bar = ease(0.5 + lt / 0.3)
@@ -423,10 +447,10 @@ class Renderer:
                                                  y - L.px(32)), radius=L.px(6), fill=RED)
         for i, layer in enumerate(self.head_layers):  # first frame already shows the headline (scroll-stopper)
             p = ease(0.55 + (lt - i * 0.05) / 0.25)
-            paste(frame, layer, (L.l - L.px(24), y + i * self.head_step - L.px(24) + L.px(50) * (1 - p)), p)
+            paste(frame, layer, (L.l - L.px(24), y + i * self.head_step - L.px(24) + L.px(50) * (1 - p)), p * out)
         if self.sub_layer:
             paste(frame, self.sub_layer, (L.l - L.px(8), y + len(self.head_layers) * self.head_step + L.px(16)),
-                  ease(0.4 + lt / 0.3))
+                  ease(0.4 + lt / 0.3) * out)
         cy = L.t + L.px(26)
         p = ease(0.5 + lt / 0.3)
         paste(frame, self.chip_brand, (L.l - L.px(30) * (1 - p), cy), p)
@@ -436,14 +460,37 @@ class Renderer:
     def body(self, sources, seg: Segment, lt: float, body_index: int, chunks) -> Image.Image:
         k, shot = current_shot(seg, lt)
         st = lt - shot.start
-        kick = 0.10 if k == 0 else 0.07  # zoom kick on every cut
-        frame = sources(k).frame(st / max(shot.dur, 0.1), kick * (1 - ease(st / 0.35)))
-        frame.paste(self.shade_body, (0, 0), self.shade_body)
+        mg = shot.mg or {}
+        kind = mg.get("type")
+        seed = hash((seg.start, k)) & 0xFFFF
+        if kind == "typo":
+            frame = motion.typo_card(st)
+        elif kind == "number":
+            frame = motion.number_card(mg.get("text", ""), label_for(mg.get("text", "")), st, seed)
+        else:
+            kick = 0.10 if k == 0 else 0.07  # zoom kick on every cut
+            frame = sources(k).frame(st / max(shot.dur, 0.1), kick * (1 - ease(st / 0.35)))
+            if self.look:
+                frame = motion.film_look(frame)
+            if kind == "hud":
+                frame = motion.hud_frame(frame, mg.get("keyword", ""), st, seed)
+            elif kind == "split":
+                other = sources((k, "b")).frame(st / max(shot.dur, 0.1))
+                frame = motion.split_frame(frame, motion.film_look(other) if self.look else other, st)
+            else:
+                frame.paste(self.shade_body, (0, 0), self.shade_body)
+            frame = motion.apply_transition(frame, shot.trans if (k or self.doc) else "punch", st)
         self.topbar(frame, body_index, min(lt / seg.dur, 1.0))
-        if seg.overlay:
-            self.stat_card(frame, seg.overlay, lt)
-        draw_subtitles(frame, chunks, lt)
-        self.wipe(frame, lt)
+        if self.doc:
+            if kind != "number":
+                y = L.t + 0.5 * L.sh if kind == "typo" else None
+                motion.draw_kinetic(frame, chunks, lt, y_center=y, dark=kind == "typo",
+                                    scale=1.25 if kind == "typo" else 1.0, reveal_all=kind == "typo")
+        else:
+            if seg.overlay:
+                self.stat_card(frame, seg.overlay, lt)
+            draw_subtitles(frame, chunks, lt)
+            self.wipe(frame, lt)
         return frame
 
     def stat_card(self, frame: Image.Image, overlay: str, lt: float) -> None:
@@ -544,6 +591,8 @@ class Unit:
     subline: str
     topic: str
     n_body: int
+    doc: bool = False
+    look: bool = False
 
 
 _RENDERER_CACHE: dict = {}
@@ -561,18 +610,19 @@ def current_shot(seg: Segment, lt: float) -> tuple[int, Shot]:
 
 def _render_unit(u: Unit) -> tuple[int, int]:
     set_layout_if_needed(*u.size)
-    key = (u.size, tuple(u.headline), u.subline, u.topic, u.n_body)
+    key = (u.size, tuple(u.headline), u.subline, u.topic, u.n_body, u.doc, u.look)
     r = _RENDERER_CACHE.get(key)
     if r is None:
         _RENDERER_CACHE.clear()
-        r = _RENDERER_CACHE[key] = Renderer(u.headline, u.subline, u.topic, u.n_body)
+        r = _RENDERER_CACHE[key] = Renderer(u.headline, u.subline, u.topic, u.n_body, u.doc, u.look)
     seg = u.seg
     srcs: dict[int, object] = {}
 
-    def sources(k: int):
+    def sources(k):
         if k not in srcs:
-            _, shot = (k, seg.shots[k]) if seg.shots else current_shot(seg, 0)
-            clip = shot.clip
+            idx = k[0] if isinstance(k, tuple) else k
+            _, shot = (idx, seg.shots[idx]) if seg.shots else current_shot(seg, 0)
+            clip = shot.mg["clip2"] if isinstance(k, tuple) else shot.clip
             if clip.kind == "video":
                 offset = max(0.0, u.k0 / FPS - shot.start)
                 srcs[k] = VideoSource(clip, L.w, L.h, offset, (u.k1 - u.k0) / FPS)
@@ -581,7 +631,7 @@ def _render_unit(u: Unit) -> tuple[int, int]:
                                       zoom=clip.zoom, fx=clip.fx)
         return srcs[k]
 
-    chunks = chunk_words(seg.words)
+    chunks = chunk_words(seg.words, 3, 22) if u.doc else chunk_words(seg.words)
     cmd = [ffmpeg(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{L.w}x{L.h}",
            "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-threads", "2",
            "-pix_fmt", "yuv420p", "-g", str(FPS * 2), u.out]
@@ -590,7 +640,7 @@ def _render_unit(u: Unit) -> tuple[int, int]:
         for k in range(u.k0, u.k1):
             lt = k / FPS
             if seg.kind == "intro":
-                frame = r.intro(sources, seg, lt)
+                frame = r.intro(sources, seg, lt, chunks)
                 if u.cover and abs(lt - 1.0) < 0.5 / FPS:
                     frame.save(u.cover)
             elif seg.kind == "body":
@@ -620,7 +670,7 @@ def workers() -> int:
 
 def render(script, shots: list[Shot], voices: list[tuple[np.ndarray, list[Word]]], music_mix_fn,
            out_mp4: Path, cover_png: Path, work: Path, size: tuple[int, int] = (1080, 1920),
-           min_total: float | None = None, log=print) -> float:
+           min_total: float | None = None, log=print, doc: bool = False, look: bool = False) -> float:
     """Build timeline, mix + master audio, render all pieces in parallel, join them. Returns seconds."""
     set_layout(*size)
     segs, total = timeline(script, shots, voices, min_total)
@@ -637,10 +687,14 @@ def render(script, shots: list[Shot], voices: list[tuple[np.ndarray, list[Word]]
     events += [(segs[0].start + sh.start - 0.08, "swish") for sh in segs[0].shots[1:]]
     for seg in segs[1:]:
         events.append((seg.start - 0.15, "whoosh"))
-        for sh in seg.shots[1:]:
-            events.append((seg.start + sh.start - 0.08, "swish"))
-        if seg.kind == "body" and seg.overlay:
+        for j, sh in enumerate(seg.shots[1:]):
+            if not doc or j % 3 == 0:  # with very fast cuts not every cut gets a sound (would be too busy)
+                events.append((seg.start + sh.start - 0.08, "swish"))
+        if seg.kind == "body" and seg.overlay and not doc:
             events.append((seg.start + 0.14, "pop"))
+        for sh in seg.shots:
+            if sh.mg and sh.mg.get("type") == "number":
+                events.append((seg.start + sh.start + 0.05, "pop"))
     mixed = music_mix_fn(voice_track, total, events)
     raw = work / "mix_raw.wav"
     write_wav(raw, mixed[: int(total * SR)])
@@ -662,7 +716,7 @@ def render(script, shots: list[Shot], voices: list[tuple[np.ndarray, list[Word]]
                 k1 = n_frames
             units.append(Unit(len(units), seg, i, body_index, k0, k1, str(work / f"part_{len(units):04d}.mp4"),
                               str(cover_png) if seg.kind == "intro" and k0 <= 1.0 * FPS < k1 else None,
-                              (L.w, L.h), script.headline, script.subline, topic, n_body))
+                              (L.w, L.h), script.headline, script.subline, topic, n_body, doc, look))
             if k1 == n_frames:
                 break
 
@@ -719,7 +773,7 @@ def scene_durations(voices, min_total) -> list[float]:
             for i, (a, _) in enumerate(voices)]
 
 
-PACES = {"Schnell – neues Bild alle ~2,5 s (beste Retention)": 2.5, "Normal – alle ~4 s": 4.0,
+PACES = {"ADHS-Edit – neues Bild ~jede Sekunde": 1.15, "Schnell – alle ~2,5 s": 2.5, "Normal – alle ~4 s": 4.0,
          "Ruhig – ein Bild pro Szene": None}
 
 
@@ -739,12 +793,13 @@ def plan_shots(script, voices, durations: list[float], pace: float | None) -> li
         starts = [0.0]
         for j in range(1, k):
             ideal = j * dur / k
-            cands = [w.start + lead for w in words if abs(w.start + lead - ideal) < 0.7]
+            cands = [w.start + lead for w in words if abs(w.start + lead - ideal) < min(0.7, pace * 0.45)]
             cut = min(cands, key=lambda x: abs(x - ideal)) if cands else ideal
-            if cut - starts[-1] >= 1.2 and dur - cut >= 1.2:
+            min_len = min(1.2, pace * 0.7)
+            if cut - starts[-1] >= min_len and dur - cut >= min_len:
                 starts.append(cut)
         for j, st in enumerate(starts):
             en = starts[j + 1] if j + 1 < len(starts) else dur
             said = " ".join(w.text for w in words if st <= w.start + lead < en)
-            shots.append(Shot(i, st, en - st, said if len(said.split()) >= 3 else text))
+            shots.append(Shot(i, st, en - st, said or text, trans=motion.transition_kind(i * 13 + j)))
     return shots

@@ -55,9 +55,14 @@ def selection_view(prep, rows):
     for i in range(len(rows)):
         rows[i][3] = ", ".join(str(n) for n in per_scene.get(i, []) if n)
     chosen = []
+    names = {"typo": "✨ Text-Karte", "number": "✨ Zahlen-Animation", "hud": "✨ HUD-Rahmen", "split": "✨ Splitscreen"}
     for sh, num in zip(prep.shots, prep.sel.nums):
-        if num and num in by_num:
-            chosen.append((by_num[num], f"Szene {sh.scene + 1} · ab {sh.start:.1f} s → Nr. {num}: {sh.text[:45]}"))
+        kind = (sh.mg or {}).get("type")
+        label = f"Szene {sh.scene + 1} · ab {sh.start:.1f} s · " + (names.get(kind, "") + " " if kind else "")
+        if kind in ("typo", "number"):
+            chosen.append((str(footage.mg_preview(kind, prep.work)), label + sh.text[:45]))
+        elif num and num in by_num:
+            chosen.append((by_num[num], label + f"Nr. {num}: {sh.text[:45]}"))
     return rows, chosen, thumbs
 
 
@@ -207,8 +212,9 @@ def do_clone(name, audio):
     return f"✅ Gespeichert als „{voice.CLONE_PREFIX}{path.stem}“.{note}", gr.update(choices=voice.voice_choices())
 
 
-def save_cfg(model, url, yt_all, browser, music_on, vol, rate, pace, speak):
+def save_cfg(model, url, yt_all, browser, music_on, vol, rate, pace, speak, cap_style, look):
     s = load_settings()
+    s.update(caption_style=cap_style, look=bool(look))
     s.update(ollama_model=model.strip(), ollama_url=url.strip(), youtube_all=bool(yt_all),
              cookies_browser="" if browser == "keiner" else browser, music_on=bool(music_on),
              music_volume=float(vol), speech_rate=f"{int(rate):+d}%", pace=pace, aussprache=speak.strip())
@@ -350,6 +356,10 @@ def build_ui() -> gr.Blocks:
                                   info="Nur nötig, wenn ein Link einen Login verlangt. Firefox funktioniert am zuverlässigsten.")
             pace = gr.Dropdown(list(PACES), value=s.get("pace") if s.get("pace") in PACES else list(PACES)[0],
                                label="Schnitt-Tempo (wie oft das Bild wechselt)")
+            cap_style = gr.Dropdown(["Doku – Wort für Wort in der Mitte", "Klassisch – 3 Wörter unten mit Info-Karten"],
+                                    value=s.get("caption_style") or "Doku – Wort für Wort in der Mitte",
+                                    label="Stil", info="Doku = Wort für Wort + eigene Motion Graphics (ADHS-Edit)")
+            look = gr.Checkbox(bool(s.get("look", True)), label="Film-Look (warmes Grading, weiches Leuchten)")
             speak = gr.Textbox(s.get("aussprache", ""), lines=3, label="Aussprache (Wort = so klingt es)",
                                info="Untertitel zeigen trotzdem das geschriebene Wort. Z. B. „CarPlug = Kahr Plagg“.")
             music_on = gr.Checkbox(bool(s.get("music_on")), label="Hintergrundmusik (aus = nur Stimme + Soundeffekte)")
@@ -357,7 +367,8 @@ def build_ui() -> gr.Blocks:
             rate = gr.Slider(-15, 30, value=int(str(s["speech_rate"]).rstrip("%")), step=1,
                              label="Sprechtempo (%)")
             cfg_msg = gr.Markdown()
-            gr.Button("Speichern", variant="primary").click(save_cfg, [m, u, yt_all, browser, music_on, vol, rate, pace, speak], cfg_msg)
+            gr.Button("Speichern", variant="primary").click(save_cfg, [m, u, yt_all, browser, music_on, vol, rate, pace, speak, cap_style, look],
+                                                            cfg_msg)
     return demo
 
 
