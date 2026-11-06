@@ -99,17 +99,13 @@ Schnitt-Tempo oder ohne Film-Look umschalten.
 - Marken, Modelle und Einheiten werden korrekt geschrieben (BMW, M760e, xDrive, PS, km/h, 500.000 Euro).
 - Automatische Rechtschreib- und Grammatikprüfung (LanguageTool, kostenlos). Modellnamen bleiben dabei unverändert.
 
-## Retention: damit die Leute dranbleiben
+## Script nur aus der Quelle
 
-- **Hook in der ersten Sekunde:** Die Headline ist ab dem ersten Frame sichtbar, mit Einschlag-Sound.
-  Direkt danach kommt ein **Open Loop** („Und warte, bis du den Preis hörst!“).
-- **Payoff am Ende:** Der stärkste Fakt (z. B. der Preis) kommt zum Schluss und löst den Open Loop auf.
-- **Re-Hooks** zwischendurch („Aber jetzt wird's richtig spannend:“).
-- **Kurze, gesprochene Sätze** statt langer Artikelsätze.
-- **Schnelle Schnitte:** Im ADHS-Edit etwa jede Sekunde ein neues Bild, auch während des Hooks.
-  Einstellbar unter „Schnitt-Tempo“.
-- **Zahlen** leuchten in den Untertiteln rot, die Info-Karten zählen hoch.
-- **Kurzes Outro.**
+- Der Sprechertext besteht **nur aus Inhalten der Quelle**. Das Tool fügt keine eigenen Sätze, Überleitungen oder
+  Ankündigungen hinzu. Einzige feste Zeile ist der Abschlusssatz „Folg CarPlug für mehr Auto-News!“.
+- Der Hook ist der Titel bzw. stärkste Fakt der Quelle. Der stärkste Fakt (z. B. der Preis) kommt ans Ende,
+  so wie er in der Quelle steht.
+- Lange Sätze werden nur an natürlichen Stellen geteilt („…, und …“), nicht umformuliert.
 
 ## Footage: passend, abwechslungsreich, ohne fremde Texte
 

@@ -99,16 +99,14 @@ def write_script(title: str, text: str, url: str = "", target: float = 40) -> tu
 PROMPT = """Du bist Social-Media-Redakteur von CarPlug (Auto-News, TikTok/Reels/Shorts, Deutsch).
 Schreibe aus der QUELLE ein virales Video-Script mit insgesamt ca. {words} gesprochenen Wörtern
 (das ist wichtig für die Videolänge – nicht kürzer!), aufgeteilt auf ca. {n} Faktenszenen.
-Ziel ist maximale Watchtime (Retention). Regeln:
-- Szene 1 ist der HOOK (max. 15 Wörter): sofort die krasseste Zahl oder Behauptung, Pattern-Interrupt,
-  gern direkte Ansprache ("Dieser BMW hält Kugeln aus…"). Danach im selben Text ein OPEN LOOP, der erst am Ende
-  aufgelöst wird (z. B. "Und warte, bis du den Preis hörst!").
-- Danach ca. {n} Szenen, je 1-3 KURZE Sätze (max. 15 Wörter pro Satz), gesprochene Sprache, emotional, mit Tempo.
-  Keine Füllsätze, kein "In diesem Video", keine Begrüßung. Nur Fakten aus der Quelle, nichts erfinden.
-- Alle 2-3 Szenen ein RE-HOOK am Satzanfang ("Aber jetzt wird's krass:", "Und das ist noch nicht alles:").
-- Der stärkste Fakt (PAYOFF, z. B. der Preis) kommt als LETZTE Faktenszene und löst den Open Loop auf.
-- Bei langen Videos: Hintergründe, Vergleiche und Einordnung aus der Quelle ergänzen.
-- Letzte Szene: "{cta}"
+WICHTIG: Der Sprechertext besteht NUR aus Inhalten der QUELLE. Füge KEINE eigenen Sätze, Überleitungen,
+Ankündigungen oder Floskeln hinzu (kein "Und warte…", kein "Aber jetzt wird's krass", kein "Und jetzt der Preis",
+keine Begrüßung, kein "In diesem Video"). Nichts erfinden, nichts kommentieren.
+Regeln:
+- Szene 1 ist der HOOK: der stärkste Fakt aus der Quelle (max. 15 Wörter).
+- Danach ca. {n} Szenen, je 1-3 kurze Sätze (max. 15 Wörter pro Satz), sachlich nach der Quelle formuliert.
+- Bei langen Videos: Hintergründe, Vergleiche und Einordnung – aber nur, was in der Quelle steht.
+- Letzte Szene genau: "{cta}"
 - overlay: 1-3 Wörter in GROSSBUCHSTABEN, z.B. "612 PS" oder "PANZERGLAS".
 - query: englischer Suchbegriff für passende Fotos, möglichst Marke + Modell (z.B. "BMW 7 Series").
 - headline: genau 3 kurze Zeilen fürs Titelbild in GROSSBUCHSTABEN, die mittlere ist das Reizwort.
@@ -148,8 +146,6 @@ def _ollama(title: str, text: str, budget: int, s: dict) -> Script:
 
 
 # --- rule-based fallback ------------------------------------------------------
-BRIDGES = ["Aber jetzt wird's richtig spannend:", "Und das ist noch nicht alles:", "Pass auf:", "Jetzt kommt's:",
-           "Und es wird noch besser:", "Achtung:"]
 PRICE = re.compile(r"\d[\d.,]*\s?(?:Euro|€)|Preis|kostet", re.I)
 
 
@@ -182,7 +178,7 @@ def _rules(title: str, text: str, budget: int) -> Script:
         score += 1.5 * sum(b.lower() in s.lower() for b in BRANDS[:40])
         scored.append((score, i, s))
     query = _model_query(title + " " + text[:500])
-    remaining = budget - 20 - len(CTA.split())  # hook + open loop + bridges
+    remaining = budget - 12 - len(CTA.split())  # hook + closing sentence
     picked = []
     for score, i, s in sorted(scored, reverse=True):  # strongest facts first, until the length fits
         if any(len(p.split()) > 32 for p in _punchy(s)):
@@ -197,14 +193,8 @@ def _rules(title: str, text: str, budget: int) -> Script:
         picked.remove(payoff)
         picked.append(payoff)
 
-    hook_line = _hook(title, text)
-    if payoff and PRICE.search(payoff[1]):
-        loop = "Und warte, bis du den Preis hörst!"
-    elif payoff:
-        loop = "Und das Krasseste kommt zum Schluss!"
-    else:
-        loop = ""
-    scenes = [Scene(f"{hook_line} {loop}".strip(), (_overlay(title + " " + text[:400]) or ""), query)]
+    # only text from the source – no own phrases (the closing sentence is the only fixed line)
+    scenes = [Scene(_hook(title, text), (_overlay(title + " " + text[:400]) or ""), query)]
     group: list[str] = []
     bodies: list[str] = []
     for _, s in picked[:-1] if payoff else picked:  # short neighbouring sentences share one scene
@@ -215,14 +205,11 @@ def _rules(title: str, text: str, budget: int) -> Script:
             group.append(part)
     if group:
         bodies.append(" ".join(group))
-    for k, b in enumerate(bodies):
-        if k and k % 2 == 0:  # re-hook every second scene
-            b = f"{BRIDGES[(k // 2 - 1) % len(BRIDGES)]} {b}"
+    for b in bodies:
         scenes.append(Scene(b, _overlay(b), query))
-    if payoff:
-        intro = "Und jetzt der Preis:" if PRICE.search(payoff[1]) else "Und jetzt das Krasseste:"
+    if payoff:  # strongest fact last – as written in the source, without announcement
         p_text = " ".join(_punchy(payoff[1]))
-        scenes.append(Scene(f"{intro} {p_text}", _overlay(p_text), query))
+        scenes.append(Scene(p_text, _overlay(p_text), query))
     scenes.append(Scene(CTA, "FOLG CARPLUG", query))
 
     keys = [sc.overlay for sc in scenes[1:-1] if sc.overlay][:3]
