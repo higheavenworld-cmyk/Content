@@ -99,10 +99,15 @@ def write_script(title: str, text: str, url: str = "", target: float = 40) -> tu
 PROMPT = """Du bist Social-Media-Redakteur von CarPlug (Auto-News, TikTok/Reels/Shorts, Deutsch).
 Schreibe aus der QUELLE ein virales Video-Script mit insgesamt ca. {words} gesprochenen Wörtern
 (das ist wichtig für die Videolänge – nicht kürzer!), aufgeteilt auf ca. {n} Faktenszenen.
-Regeln:
-- Szene 1 ist der HOOK: max. 12 Wörter, Neugier oder Überraschung, wichtigste Zahl nennen.
-- Danach ca. {n} Szenen, je 1-3 Sätze (ca. 20-30 Wörter), gesprochen, locker, nur Fakten aus der Quelle.
-  Bei langen Videos: Hintergründe, Vergleiche und Einordnung aus der Quelle ergänzen, nichts erfinden.
+Ziel ist maximale Watchtime (Retention). Regeln:
+- Szene 1 ist der HOOK (max. 15 Wörter): sofort die krasseste Zahl oder Behauptung, Pattern-Interrupt,
+  gern direkte Ansprache ("Dieser BMW hält Kugeln aus…"). Danach im selben Text ein OPEN LOOP, der erst am Ende
+  aufgelöst wird (z. B. "Und warte, bis du den Preis hörst!").
+- Danach ca. {n} Szenen, je 1-3 KURZE Sätze (max. 15 Wörter pro Satz), gesprochene Sprache, emotional, mit Tempo.
+  Keine Füllsätze, kein "In diesem Video", keine Begrüßung. Nur Fakten aus der Quelle, nichts erfinden.
+- Alle 2-3 Szenen ein RE-HOOK am Satzanfang ("Aber jetzt wird's krass:", "Und das ist noch nicht alles:").
+- Der stärkste Fakt (PAYOFF, z. B. der Preis) kommt als LETZTE Faktenszene und löst den Open Loop auf.
+- Bei langen Videos: Hintergründe, Vergleiche und Einordnung aus der Quelle ergänzen.
 - Letzte Szene: "{cta}"
 - overlay: 1-3 Wörter in GROSSBUCHSTABEN, z.B. "612 PS" oder "PANZERGLAS".
 - query: englischer Suchbegriff für passende Fotos, möglichst Marke + Modell (z.B. "BMW 7 Series").
@@ -143,6 +148,30 @@ def _ollama(title: str, text: str, budget: int, s: dict) -> Script:
 
 
 # --- rule-based fallback ------------------------------------------------------
+BRIDGES = ["Aber jetzt wird's richtig spannend:", "Und das ist noch nicht alles:", "Pass auf:", "Jetzt kommt's:",
+           "Und es wird noch besser:", "Achtung:"]
+PRICE = re.compile(r"\d[\d.,]*\s?(?:Euro|€)|Preis|kostet", re.I)
+
+
+def _wow(s: str) -> float:
+    """How strong a fact is for the payoff: prices and big numbers win."""
+    nums = [float(x.replace(".", "").replace(",", ".")) for x in re.findall(r"\d[\d.]*(?:,\d+)?", s)
+            if x.replace(".", "").replace(",", "").isdigit()]
+    return (5 if PRICE.search(s) else 0) + 2 * len(NUM_UNIT.findall(s)) + (min(max(nums), 1e6) / 2e5 if nums else 0)
+
+
+def _punchy(s: str) -> list[str]:
+    """Long written sentences -> short spoken ones (split only where it stays grammatical)."""
+    if len(s.split()) <= 20:
+        return [s]
+    parts = re.split(r",\s+(?=(?:und|aber|doch|denn)\s)|\s+[–—]\s+|;\s+", s, maxsplit=1)
+    if len(parts) == 2 and min(len(p.split()) for p in parts) >= 5:
+        a, b = parts[0].rstrip(",;") + ".", parts[1]
+        b = re.sub(r"^(und|aber|doch|denn)\s+", lambda m: m.group(1).capitalize() + " ", b)
+        return [a] + _punchy(b[0].upper() + b[1:])
+    return [s]
+
+
 def _rules(title: str, text: str, budget: int) -> Script:
     title = re.sub(r"\s*[|–—-]\s*[^|–—-]{2,30}$", "", title).strip() or "Neue Auto-News"
     sents = [re.sub(r"\s+", " ", s).strip() for s in re.split(r"(?<=[.!?])\s+|\n+", text)]
@@ -153,8 +182,7 @@ def _rules(title: str, text: str, budget: int) -> Script:
         score += 1.5 * sum(b.lower() in s.lower() for b in BRANDS[:40])
         scored.append((score, i, s))
     query = _model_query(title + " " + text[:500])
-    hook = _hook(title, text)
-    remaining = budget - len(hook.split()) - len(CTA.split())
+    remaining = budget - 20 - len(CTA.split())  # hook + open loop + bridges
     picked = []
     for score, i, s in sorted(scored, reverse=True):  # strongest facts first, until the length fits
         s = _shorten(s, 45)
@@ -163,16 +191,37 @@ def _rules(title: str, text: str, budget: int) -> Script:
         picked.append((i, s))
         remaining -= len(s.split())
     picked.sort()
+    payoff = max(picked, key=lambda x: _wow(x[1])) if len(picked) >= 3 else None
+    if payoff:  # strongest fact at the end = reason to keep watching
+        picked.remove(payoff)
+        picked.append(payoff)
 
-    scenes = [Scene(hook, (_overlay(title + " " + text[:400]) or ""), query)]
+    hook_line = _hook(title, text)
+    if payoff and PRICE.search(payoff[1]):
+        loop = "Und warte, bis du den Preis hörst!"
+    elif payoff:
+        loop = "Und das Krasseste kommt zum Schluss!"
+    else:
+        loop = ""
+    scenes = [Scene(f"{hook_line} {loop}".strip(), (_overlay(title + " " + text[:400]) or ""), query)]
     group: list[str] = []
-    for _, s in picked:  # short neighbouring sentences share one scene (one picture)
-        if group and len(" ".join(group + [s]).split()) > 32:
-            scenes.append(Scene(" ".join(group), _overlay(" ".join(group)), query))
-            group = []
-        group.append(s)
+    bodies: list[str] = []
+    for _, s in picked[:-1] if payoff else picked:  # short neighbouring sentences share one scene
+        for part in _punchy(s):
+            if group and len(" ".join(group + [part]).split()) > 30:
+                bodies.append(" ".join(group))
+                group = []
+            group.append(part)
     if group:
-        scenes.append(Scene(" ".join(group), _overlay(" ".join(group)), query))
+        bodies.append(" ".join(group))
+    for k, b in enumerate(bodies):
+        if k and k % 2 == 0:  # re-hook every second scene
+            b = f"{BRIDGES[(k // 2 - 1) % len(BRIDGES)]} {b}"
+        scenes.append(Scene(b, _overlay(b), query))
+    if payoff:
+        intro = "Und jetzt der Preis:" if PRICE.search(payoff[1]) else "Und jetzt das Krasseste:"
+        p_text = " ".join(_punchy(payoff[1]))
+        scenes.append(Scene(f"{intro} {p_text}", _overlay(p_text), query))
     scenes.append(Scene(CTA, "FOLG CARPLUG", query))
 
     keys = [sc.overlay for sc in scenes[1:-1] if sc.overlay][:3]

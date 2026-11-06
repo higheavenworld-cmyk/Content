@@ -54,8 +54,21 @@ Bei Hochformat bleiben alle Texte außerhalb der App-Bedienelemente (Buttons rec
 | Voice-Over | Microsoft-Neural-Stimmen. Am natürlichsten sind die ★-Stimmen Florian und Seraphina. Dazu Aussprache-Aufbereitung (km/h, Einheiten, Modellnamen) und Studio-Klang. Am realistischsten ist deine geklonte Stimme |
 | Footage | siehe unten |
 | Untertitel | wortgenau, aktives Wort in CarPlug-Rot |
-| Musik | eigene Tracks aus `assets\music`, sonst ein automatisch erzeugter Beat |
+| Ton | Keine Hintergrundmusik (unter Einstellungen einschaltbar), dafür Soundeffekte: Einschlag am Start, Wusch bei Schnitten, Pop bei Zahlen. Gemastert auf -14 LUFS (TikTok-Lautstärke) |
+| Aussprache | „CarPlug“ und „News“ werden englisch gesprochen. Die Liste ist unter Einstellungen erweiterbar, die Untertitel zeigen trotzdem das geschriebene Wort |
 | Motion Graphics | Intro im Thumbnail-Look, Info-Karten mit hochzählenden Zahlen, Story-Fortschrittsbalken, rote Übergänge, Outro |
+
+## Retention: damit die Leute dranbleiben
+
+- **Hook in der ersten Sekunde:** Die Headline ist ab dem ersten Frame sichtbar, mit Einschlag-Sound.
+  Direkt danach kommt ein **Open Loop** („Und warte, bis du den Preis hörst!“).
+- **Payoff am Ende:** Der stärkste Fakt (z. B. der Preis) kommt zum Schluss und löst den Open Loop auf.
+- **Re-Hooks** zwischendurch („Aber jetzt wird's richtig spannend:“).
+- **Kurze, gesprochene Sätze** statt langer Artikelsätze.
+- **Schnelle Schnitte:** Das Bild wechselt etwa alle 2,5 Sekunden, mit Zoom-Kick, auch während des Hooks.
+  Einstellbar unter „Schnitt-Tempo“.
+- **Zahlen** leuchten in den Untertiteln rot, die Info-Karten zählen hoch.
+- **Kurzes Outro.**
 
 ## Footage: passend, abwechslungsreich, ohne fremde Texte
 
@@ -67,9 +80,9 @@ Bei Hochformat bleiben alle Texte außerhalb der App-Bedienelemente (Buttons rec
   das Thema am deutlichsten. Kein Bild kommt doppelt vor, aus Videos wird jedes Mal ein anderer Abschnitt genommen.
 - **Bei Video-Links** wird genau die Stelle genommen, an der der Satz gesagt wird.
 - **Nur Bilder aus dem Artikel selbst.** Teaser anderer Artikel, Autorenfotos, Werbung und Logos werden ignoriert.
-- **Du hast das letzte Wort.** Mit **② Footage prüfen** siehst du pro Szene das gewählte Bild und darunter alle
-  gefundenen Bilder mit Nummern. Gefällt dir eins nicht, trägst du in der Szenen-Tabelle unter **„Footage-Nr.“**
-  eine andere Nummer ein. Leer lassen heißt, die KI wählt.
+- **Du hast das letzte Wort.** Mit **② Footage prüfen** siehst du jeden Schnitt mit seinem Bild und darunter alle
+  gefundenen Bilder mit Nummern. In der Szenen-Tabelle steht unter **„Footage-Nr.“** eine Nummer pro Schnitt,
+  z. B. „3, 7, 12“. Ändere sie nach Belieben. Gibst du weniger Nummern ein als Schnitte, wählt die KI den Rest.
 - **Nur das reine Bild.** Eingeblendete Texte, Untertitel, Wasserzeichen, Kanalnamen und schwarze Balken werden
   erkannt und weggeschnitten oder retuschiert, sonst wird das Bild nicht verwendet.
 - **Quellen:** deine Links und Uploads, Bilder aus Artikeln, dann freies Material (YouTube mit

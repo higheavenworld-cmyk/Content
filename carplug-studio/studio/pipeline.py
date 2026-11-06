@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import extract, footage, learn, music, render, translate, voice
 from .config import OUTPUT_DIR, WORK_DIR, load_settings
-from .script import Script, min_seconds, write_script
+from .script import Scene, Script, min_seconds, write_script
 
 
 def mmss(sec: float) -> str:
@@ -93,10 +93,17 @@ class Prepared:
     durations: list[float]
     sel: footage.Selection
     started: float
+    shots: list = None        # render.Shot per cut (pictures change every few seconds)
+    slots: list = None        # Scene-like entry per shot, used for footage matching
+
+
+def _pace() -> float | None:
+    return render.PACES.get(load_settings().get("pace", ""), 2.5)
 
 
 def _key(script: Script, voice_name, use_article, use_free, target, size) -> tuple:
-    return (tuple(sc.text for sc in script.scenes), voice_name, use_article, use_free, target, tuple(size))
+    return (tuple(sc.text for sc in script.scenes), voice_name, use_article, use_free, target, tuple(size),
+            _pace())
 
 
 def prepare(script: Script, src: extract.Source, voice_name: str, use_article=True, use_free=True,
@@ -111,18 +118,40 @@ def prepare(script: Script, src: extract.Source, voice_name: str, use_article=Tr
     voices = _speak(script, voice_name, work, s["speech_rate"], min_total, log)
     log("2/4 Footage wird gesucht und von der KI ausgewählt…")
     durations = render.scene_durations(voices, min_total)
-    sel = footage.collect(script.scenes, durations, src, work / "footage", size[0] / size[1],
+    shots = render.plan_shots(script, voices, durations, _pace())
+    slots = [Scene(sh.text, script.scenes[sh.scene].overlay, script.scenes[sh.scene].query) for sh in shots]
+    sel = footage.collect(slots, [sh.dur for sh in shots], src, work / "footage", size[0] / size[1],
                           use_article, use_free, bool(s.get("youtube_all")), log)
+    for sh, clip in zip(shots, sel.clips):
+        sh.clip = clip
     return Prepared(_key(script, voice_name, use_article, use_free, target, size), src, voice_name, target,
-                    tuple(size), min_total, work, voices, durations, sel, t0)
+                    tuple(size), min_total, work, voices, durations, sel, t0, shots, slots)
 
 
-def choose(prep: Prepared, script: Script, overrides: dict[int, int], log=print) -> None:
-    """Apply the user's footage numbers (scene index -> number)."""
-    clean_over = {i: n for i, n in overrides.items() if n and i < len(script.scenes) - 1}
-    if clean_over and any(prep.sel.nums[i] != n for i, n in clean_over.items()):
-        prep.sel = footage.assign(prep.sel.pool, script.scenes, prep.durations, prep.size[0] / prep.size[1],
-                                  prep.sel.smart, clean_over, log)
+def scene_numbers(prep: Prepared) -> dict[int, list[int]]:
+    """Footage numbers per scene (one per shot)."""
+    out: dict[int, list[int]] = {}
+    for sh, num in zip(prep.shots, prep.sel.nums):
+        out.setdefault(sh.scene, []).append(num)
+    return out
+
+
+def choose(prep: Prepared, script: Script, overrides: dict[int, list[int]], log=print) -> None:
+    """Apply the user's footage numbers: {scene index: [number per shot, …]}."""
+    slot_over: dict[int, int] = {}
+    for scene, nums in overrides.items():
+        idx = [k for k, sh in enumerate(prep.shots) if sh.scene == scene]
+        nums = [n for n in nums if n]
+        if not idx or not nums:
+            continue
+        for j, k in enumerate(idx):
+            slot_over[k] = nums[j] if j < len(nums) else 0  # fewer numbers than cuts: the AI fills the rest
+    slot_over = {k: n for k, n in slot_over.items() if n}
+    if slot_over and any(prep.sel.nums[k] != n for k, n in slot_over.items()):
+        prep.sel = footage.assign(prep.sel.pool, prep.slots, [sh.dur for sh in prep.shots],
+                                  prep.size[0] / prep.size[1], prep.sel.smart, slot_over, log, has_outro=False)
+        for sh, clip in zip(prep.shots, prep.sel.clips):
+            sh.clip = clip
 
 
 def finish(prep: Prepared, script: Script, log=print) -> dict:
@@ -135,10 +164,11 @@ def finish(prep: Prepared, script: Script, log=print) -> dict:
     try:
         log(f"3/4 Video wird gerendert ({prep.size[0]}×{prep.size[1]})…")
 
-        def mix(voice_track, total, sfx):
-            return music.mix(voice_track, music.background(total + 1, work), float(s["music_volume"]), sfx)
+        def mix(voice_track, total, events):
+            bg = music.background(total + 1, work) if s.get("music_on") else None
+            return music.mix(voice_track, bg, float(s["music_volume"]), events)
 
-        render.render(script, prep.sel.clips, prep.voices, mix, out / "video.mp4", out / "cover.png", work,
+        render.render(script, prep.shots, prep.voices, mix, out / "video.mp4", out / "cover.png", work,
                       prep.size, prep.min_total, log)
         real = video_seconds(out / "video.mp4")
         if prep.min_total and real < prep.min_total - 0.05:

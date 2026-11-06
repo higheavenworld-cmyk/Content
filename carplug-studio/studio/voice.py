@@ -109,13 +109,56 @@ def polish(src: Path, dst: Path) -> None:
                     str(dst)], check=True)
 
 
+def pronunciations() -> list[tuple[str, str]]:
+    """[(written, spoken)] from the settings, e.g. ('CarPlug', 'Kahr Plagg')."""
+    from .config import load_settings
+    out = []
+    for line in str(load_settings().get("aussprache", "")).splitlines():
+        if "=" in line:
+            w, sp = (x.strip() for x in line.split("=", 1))
+            if w and sp:
+                out.append((w, sp))
+    return out
+
+
+def apply_pronunciation(text: str, rules: list[tuple[str, str]]) -> str:
+    for written, spoken in rules:
+        text = re.sub(rf"(?<![\w]){re.escape(written)}(?![\w])", spoken, text, flags=re.I)
+    return text
+
+
+def restore_written(words: list[Word], rules: list[tuple[str, str]]) -> list[Word]:
+    """Subtitles show 'CarPlug', not 'Kahr Plagg': merge / rename the spoken-form words back."""
+    for written, spoken in rules:
+        toks = spoken.lower().split()
+        out, i = [], 0
+        while i < len(words):
+            seg = words[i:i + len(toks)]
+            core = [re.sub(r"[^\w-]", "", w.text).lower() for w in seg]
+            if len(toks) > 1 and len(seg) == len(toks) and core == toks:
+                tail = re.sub(r"^[\w-]+", "", seg[-1].text)
+                out.append(Word(written + tail, seg[0].start, seg[-1].end))
+                i += len(toks)
+                continue
+            w = words[i]
+            if len(toks) == 1:
+                w = Word(re.sub(re.escape(spoken), written, w.text, flags=re.I), w.start, w.end)
+            out.append(w)
+            i += 1
+        words = out
+    return words
+
+
 def synth_many(texts: list[str], voice: str, work: Path, rate: str = "+0%",
                log=print) -> list[tuple[np.ndarray, list[Word]]]:
     """Speak every scene; returns [(samples at 44.1 kHz mono, word timings), ...]."""
-    texts = [speech_text(t) for t in texts]
+    rules = pronunciations()
+    texts = [apply_pronunciation(speech_text(t), rules) for t in texts]
     if voice.startswith(CLONE_PREFIX):
-        return _synth_clone(texts, VOICES_DIR / f"{voice[len(CLONE_PREFIX):]}.wav", work, log)
-    return [_synth_edge(t, VOICES.get(voice, voice), work / f"voice_{i}.wav", rate) for i, t in enumerate(texts)]
+        res = _synth_clone(texts, VOICES_DIR / f"{voice[len(CLONE_PREFIX):]}.wav", work, log)
+    else:
+        res = [_synth_edge(t, VOICES.get(voice, voice), work / f"voice_{i}.wav", rate) for i, t in enumerate(texts)]
+    return [(audio, restore_written(words, rules)) for audio, words in res]
 
 
 def _synth_edge(text: str, voice_id: str, out_wav: Path, rate: str) -> tuple[np.ndarray, list[Word]]:

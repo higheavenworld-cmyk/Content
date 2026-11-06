@@ -58,6 +58,8 @@ class Clip:
     start: float = 0.0   # video: where the part starts
     vf: str = ""         # video: ffmpeg crop / watermark-removal filters
     flip: bool = False   # mirrored (only when footage has to be reused)
+    zoom: float = 1.0    # > 1: detail shot of the same picture
+    fx: float = 0.5      # horizontal focus of the crop (0 = left, 1 = right)
 
 
 @dataclass
@@ -90,15 +92,16 @@ class Selection:
 
 
 # --- public entry --------------------------------------------------------------
-def collect(scenes, durations, src, work: Path, aspect: float, use_article=True, use_free=True,
+def collect(slots, durations, src, work: Path, aspect: float, use_article=True, use_free=True,
             youtube_all=False, log=print) -> Selection:
-    pool = build_pool(scenes, durations, src, work, aspect, use_article, use_free, youtube_all, log)
-    smart = rate_pool(pool, scenes, log)
-    return assign(pool, scenes, durations, aspect, smart, {}, log)
+    """slots: one entry per shot (Scene-like: text, overlay, query) – there is no outro slot."""
+    pool = build_pool(slots, durations, src, work, aspect, use_article, use_free, youtube_all, log, has_outro=False)
+    smart = rate_pool(pool, slots, log)
+    return assign(pool, slots, durations, aspect, smart, {}, log, has_outro=False)
 
 
 def build_pool(scenes, durations, src, work: Path, aspect: float, use_article=True, use_free=True,
-               youtube_all=False, log=print) -> list[Cand]:
+               youtube_all=False, log=print, has_outro: bool = True) -> list[Cand]:
     work.mkdir(parents=True, exist_ok=True)
     pool: list[Cand] = []
     lock = threading.Lock()
@@ -113,7 +116,7 @@ def build_pool(scenes, durations, src, work: Path, aspect: float, use_article=Tr
     log(f"Prüfe {len(pool)} Bilder/Videos aus deinen Quellen auf Text und Wasserzeichen…")
     pool = _prepare_all(pool, work, aspect, lock)
     log(f"{len(pool)} saubere Bilder/Videos aus deinen Quellen.")
-    n_needed = max(len(scenes) - 1, 1)  # the outro needs no footage
+    n_needed = max(len(scenes) - (1 if has_outro else 0), 1)
     if use_free and _capacity(pool, durations) < n_needed * 1.6:
         for q in _queries(scenes):
             if _capacity(pool, durations) >= n_needed * 2.2:  # extra choice so the AI can pick
@@ -171,13 +174,13 @@ def rate_pool(pool: list[Cand], scenes, log=print) -> bool:
 
 # --- assignment ----------------------------------------------------------------------
 def assign(pool: list[Cand], scenes, durations, aspect: float, smart: bool, overrides: dict[int, int],
-           log=print) -> Selection:
+           log=print, has_outro: bool = True) -> Selection:
     """Give every scene the best fitting footage overall (not just the first good one), never twice.
     overrides: {scene index: footage number} chosen by the user."""
     for c in pool:
         c.used, c.uses = [], 0
     n = len(scenes)
-    last = n - 1  # outro: logo screen, no footage
+    last = n - 1 if has_outro else n  # outro: logo screen, no footage
     by_num = {c.num: c for c in pool}
     fits = _fit_matrix(pool, scenes, smart)
     chosen: dict[int, tuple[Cand, float | None, clean.VideoCut | None]] = {}
@@ -229,33 +232,34 @@ def assign(pool: list[Cand], scenes, durations, aspect: float, smart: bool, over
         c.uses += 1
         reused += 1
         if c.kind == "image":
-            chosen[i] = (c, None, None)
+            chosen[i] = (c, None, None, c.uses)
         else:
             c.used.clear()
             plan = _video_plan(c, i, durations[i], aspect, fits, smart, scenes[i].text)
-            chosen[i] = (c, *(plan or (0.0, clean.VideoCut(0.0, (0, 0, c.video.w, c.video.h)))))
-        chosen[i] = chosen[i] + ("flip",)
+            chosen[i] = (c, *(plan or (0.0, clean.VideoCut(0.0, (0, 0, c.video.w, c.video.h)))), c.uses)
     if reused:
-        log(f"Hinweis: Zu wenig unterschiedliches Material – {reused} Szene(n) nutzen ein Bild gespiegelt erneut.")
+        log(f"Hinweis: Zu wenig unterschiedliches Material – {reused} Schnitt(e) zeigen einen anderen Ausschnitt "
+            f"eines schon genutzten Bildes. Mehr Links/Bilder = mehr Abwechslung.")
 
     clips, nums, credits = [], [], []
+    variants = [(1.0, 0.5, False), (1.45, 0.25, False), (1.45, 0.75, True), (1.8, 0.5, False), (1.3, 0.1, True)]
     for i in range(n):
         if i == last:
             ref = clips[-1] if clips else None
             clips.append(ref or Clip(pool[0].clean_path or pool[0].path, pool[0].kind))
             nums.append(0)
             continue
-        c, start, cut, *flag = chosen[i]
-        flip = bool(flag)
+        c, start, cut, *rep_n = chosen[i]
+        zoom, fx, flip = variants[(rep_n[0] - 1) % len(variants)] if rep_n else (1.0, 0.5, False)
         if c.kind == "image":
-            clips.append(Clip(c.clean_path, "image", c.credit, flip=flip))
+            clips.append(Clip(c.clean_path, "image", c.credit, flip=flip, zoom=zoom, fx=fx))
         else:
             clips.append(Clip(c.path, "video", c.credit, start or 0.0,
                               clean.ffmpeg_filters(cut, c.video.w, c.video.h), flip=flip))
         nums.append(c.num)
         if c.credit and c.credit not in credits:
             credits.append(c.credit)
-    log(f"Footage: {len(set(nums) - {0})} verschiedene Bilder/Videos für {last} Szenen"
+    log(f"Footage: {len(set(nums) - {0})} verschiedene Bilder/Videos für {last} Schnitte"
         + (" (KI-Bildverständnis)." if smart else " (Stichworte)."))
     return Selection(clips, nums, credits, pool, smart)
 

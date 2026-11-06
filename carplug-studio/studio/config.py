@@ -65,6 +65,9 @@ DEFAULT_SETTINGS = {
     "ollama_url": "http://localhost:11434",
     "youtube_all": False,                # also non-CC YouTube videos as footage (copyright risk)
     "cookies_browser": "",               # browser with your Instagram/TikTok login (only if a link needs it)
+    # pronunciation: written word = how it should sound (German letters). Subtitles keep the written word.
+    "aussprache": "CarPlug = Kahr Plagg\nNews = Njuhs",
+    "music_on": False,                   # background music (off: voice + sound effects only)
     "music_volume": 0.18,
     "speech_rate": "+0%",
 }

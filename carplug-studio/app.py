@@ -13,6 +13,7 @@ import gradio as gr
 from studio import footage, learn, pipeline, voice
 from studio.config import ASSETS, CUSTOM_FORMAT, FORMATS, LENGTHS, OUTPUT_DIR, load_settings, save_settings
 from studio.pipeline import mmss
+from studio.render import PACES
 from studio.script import Scene, Script, estimate_seconds, min_seconds
 
 HEADERS = ["Sprechertext", "Einblendung", "Bildsuche (englisch)", "Footage-Nr."]
@@ -33,15 +34,15 @@ def ui_to_script(h1, h2, h3, sub, rows, caption, tags) -> Script:
     return Script([h1 or "", h2 or "", h3 or ""], sub or "", scenes, caption or "", (tags or "").split())
 
 
-def overrides_from(rows) -> dict[int, int]:
-    """Footage numbers the user typed into the scene table (empty = let the AI choose)."""
+def overrides_from(rows) -> dict[int, list[int]]:
+    """Footage numbers the user typed into the scene table, e.g. "3, 7" (empty = let the AI choose)."""
+    import re
     out = {}
     for i, r in enumerate(rows or []):
         if r and len(r) > 3 and str(r[3]).strip():
-            try:
-                out[i] = int(float(str(r[3]).strip().lstrip("Nr.").strip()))
-            except ValueError:
-                pass
+            nums = [int(x) for x in re.findall(r"\d+", str(r[3]))]
+            if nums:
+                out[i] = nums
     return out
 
 
@@ -50,13 +51,13 @@ def selection_view(prep, rows):
     thumbs = footage.thumbnails(prep.sel, prep.work)
     by_num = {int(lbl.split()[1]): path for path, lbl in thumbs}
     rows = [list(r) + [""] * (4 - len(r)) for r in (rows or [])]
+    per_scene = pipeline.scene_numbers(prep)
+    for i in range(len(rows)):
+        rows[i][3] = ", ".join(str(n) for n in per_scene.get(i, []) if n)
     chosen = []
-    for i, num in enumerate(prep.sel.nums):
-        if i < len(rows):
-            rows[i][3] = str(num) if num else ""
+    for sh, num in zip(prep.shots, prep.sel.nums):
         if num and num in by_num:
-            text = str(rows[i][0])[:50] if i < len(rows) else ""
-            chosen.append((by_num[num], f"Szene {i + 1} → Nr. {num}: {text}"))
+            chosen.append((by_num[num], f"Szene {sh.scene + 1} · ab {sh.start:.1f} s → Nr. {num}: {sh.text[:45]}"))
     return rows, chosen, thumbs
 
 
@@ -206,11 +207,11 @@ def do_clone(name, audio):
     return f"✅ Gespeichert als „{voice.CLONE_PREFIX}{path.stem}“.{note}", gr.update(choices=voice.voice_choices())
 
 
-def save_cfg(model, url, yt_all, browser, vol, rate):
+def save_cfg(model, url, yt_all, browser, music_on, vol, rate, pace, speak):
     s = load_settings()
     s.update(ollama_model=model.strip(), ollama_url=url.strip(), youtube_all=bool(yt_all),
-             cookies_browser="" if browser == "keiner" else browser,
-             music_volume=float(vol), speech_rate=f"{int(rate):+d}%")
+             cookies_browser="" if browser == "keiner" else browser, music_on=bool(music_on),
+             music_volume=float(vol), speech_rate=f"{int(rate):+d}%", pace=pace, aussprache=speak.strip())
     save_settings(s)
     return "✅ Gespeichert."
 
@@ -282,7 +283,8 @@ def build_ui() -> gr.Blocks:
                 btn_video = gr.Button("③ Video erstellen", variant="primary")
             with gr.Accordion("Footage-Auswahl (nach ② sichtbar)", open=True):
                 gr.Markdown("**Gewählt pro Szene.** Anderes Bild gewünscht? In der Szenen-Tabelle bei "
-                            "„Footage-Nr.“ eine Nummer aus „Alle gefundenen“ eintragen. Leer lassen = KI wählt.")
+                            "„Footage-Nr.“ Nummern aus „Alle gefundenen“ eintragen – eine pro Schnitt, z. B. „3, 7“ "
+                            "(weniger Nummern als Schnitte: den Rest wählt die KI). Leer lassen = KI wählt.")
                 chosen_gal = gr.Gallery(label="Gewählt pro Szene", columns=6, height=260, object_fit="cover",
                                         allow_preview=True)
                 pool_gal = gr.Gallery(label="Alle gefundenen Bilder/Videos (Nummern)", columns=8, height=320,
@@ -346,11 +348,16 @@ def build_ui() -> gr.Blocks:
                                   value=s.get("cookies_browser") or "keiner",
                                   label="Login für Instagram & Co.: Browser, in dem du eingeloggt bist",
                                   info="Nur nötig, wenn ein Link einen Login verlangt. Firefox funktioniert am zuverlässigsten.")
-            vol = gr.Slider(0, 0.6, value=float(s["music_volume"]), step=0.02, label="Musik-Lautstärke")
-            rate = gr.Slider(-10, 30, value=int(str(s["speech_rate"]).rstrip("%")), step=1,
+            pace = gr.Dropdown(list(PACES), value=s.get("pace") if s.get("pace") in PACES else list(PACES)[0],
+                               label="Schnitt-Tempo (wie oft das Bild wechselt)")
+            speak = gr.Textbox(s.get("aussprache", ""), lines=3, label="Aussprache (Wort = so klingt es)",
+                               info="Untertitel zeigen trotzdem das geschriebene Wort. Z. B. „CarPlug = Kahr Plagg“.")
+            music_on = gr.Checkbox(bool(s.get("music_on")), label="Hintergrundmusik (aus = nur Stimme + Soundeffekte)")
+            vol = gr.Slider(0, 0.6, value=float(s["music_volume"]), step=0.02, label="Musik-Lautstärke (wenn an)")
+            rate = gr.Slider(-15, 30, value=int(str(s["speech_rate"]).rstrip("%")), step=1,
                              label="Sprechtempo (%)")
             cfg_msg = gr.Markdown()
-            gr.Button("Speichern", variant="primary").click(save_cfg, [m, u, yt_all, browser, vol, rate], cfg_msg)
+            gr.Button("Speichern", variant="primary").click(save_cfg, [m, u, yt_all, browser, music_on, vol, rate, pace, speak], cfg_msg)
     return demo
 
 
