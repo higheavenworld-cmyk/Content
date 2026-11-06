@@ -49,7 +49,7 @@ Bei Hochformat bleiben alle Texte außerhalb der App-Bedienelemente (Buttons rec
 | Schritt | Kostenlos und ohne Konto |
 |---|---|
 | Text aus Links und Dateien | Artikeltext. Bei Videos: Untertitel, Beschreibung oder lokale Spracherkennung |
-| Immer auf Deutsch | Fremdsprachige Quellen (z. B. englische YouTube-Videos) werden automatisch übersetzt: lokale KI, sonst Google oder MyMemory (kostenlos, ohne Konto) |
+| Immer auf Deutsch | Fremdsprachige Quellen werden automatisch übersetzt, nacheinander mit: lokaler KI (Ollama), Microsoft-Übersetzer, Google, Offline-Übersetzer (mit Stimmen-Klon installiert), MyMemory. Alles kostenlos und ohne Konto, mit wenigen großen Anfragen. Einmal Übersetztes wird gespeichert |
 | Script mit Hook, Fakten und Call-to-Action | eingebauter Regel-Writer, besser mit lokaler KI (siehe unten) |
 | Voice-Over | Microsoft-Neural-Stimmen. Am natürlichsten sind die ★-Stimmen Florian und Seraphina. Dazu Aussprache-Aufbereitung (km/h, Einheiten, Modellnamen) und Studio-Klang. Am realistischsten ist deine geklonte Stimme |
 | Footage | siehe unten |

@@ -32,7 +32,7 @@ if errorlevel 1 goto :fail
 
 echo [2/3] Installiere Chatterbox (gross, bitte warten)...
 ".venv-klon\Scripts\python.exe" -m pip install --upgrade pip >nul
-".venv-klon\Scripts\python.exe" -m pip install chatterbox-tts
+".venv-klon\Scripts\python.exe" -m pip install chatterbox-tts sentencepiece sacremoses
 if errorlevel 1 goto :fail
 
 echo [3/3] Installiere Wort-Erkennung fuer exakte Untertitel...
